@@ -1,0 +1,64 @@
+package require tcltest 2
+namespace import ::tcltest::test
+source [file join [file dirname [info script]] .. parser.tcl]
+proc collect {args} { lappend ::events $args }
+proc setup {} { set ::events {}; return [::LATerm::Parser new collect] }
+
+test ascii-1 {ASCII print and C0 controls} -body {
+    set p [setup]
+    $p feed [binary format H* 41420809430a0d]
+    $p destroy
+    set ::events
+} -result {{print A} {print B} {control BS} {control HT} {print C} {control LF} {control CR}}
+
+test csi-1 {CSI split across reads} -body {
+    set p [setup]
+    $p feed "\033\[3"
+    set midway [$p state]
+    $p feed "1mX"
+    $p destroy
+    list $midway $::events
+} -result {CSI {{csi 31 {} m} {print X}}}
+
+test cancel-1 {CAN aborts incomplete CSI} -body {
+    set p [setup]
+    $p feed "\033\[31\030Z"
+    set result $::events
+    $p destroy
+    set result
+} -result {{print Z}}
+
+test escape-1 {single ESC command} -body {
+    set p [setup]
+    $p feed "\033D"
+    set result $::events
+    $p destroy
+    set result
+} -result {{escape D}}
+
+test esc-intermediate-1 {ESC with intermediate} -body {
+    set p [setup]
+    $p feed "\033("
+    $p feed "B"
+    set result $::events
+    $p destroy
+    set result
+} -result {{escape (B}}
+
+test csi-intermediate-1 {CSI intermediate} -body {
+    set p [setup]
+    $p feed "\033\[1 q"
+    set result $::events
+    $p destroy
+    set result
+} -result {{csi 1 { } q}}
+
+test esc-restart-1 {ESC interrupts partial CSI} -body {
+    set p [setup]
+    $p feed "\033\[31\033D"
+    set result $::events
+    $p destroy
+    set result
+} -result {{escape D}}
+
+::tcltest::cleanupTests
