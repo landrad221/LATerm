@@ -1,0 +1,138 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+source [file join \
+    [file dirname [info script]] .. "render/screen.tcl"]
+
+test resize-1.1 {grow columns} -body {
+    set s [::laterm::Screen new 2 4]
+    $s print "AB"
+    $s resize 2 6
+
+    set result [list [$s dimensions] [$s dump]]
+    $s destroy
+    set result
+} -result [list {2 6} "AB    \n      "]
+
+test resize-1.2 {shrink columns} -body {
+    set s [::laterm::Screen new 2 6]
+    $s print "ABCDEF"
+    $s resize 2 4
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "ABCD\n    "
+
+test resize-1.3 {grow rows} -body {
+    set s [::laterm::Screen new 2 4]
+    $s print "AB"
+    $s resize 4 4
+
+    set result [list [$s dimensions] [$s dump]]
+    $s destroy
+    set result
+} -result [list {4 4} "AB  \n    \n    \n    "]
+
+test resize-1.4 {shrink rows} -body {
+    set s [::laterm::Screen new 3 4]
+    $s print "AB"
+    $s moveCursor 2 0
+    $s print "CD"
+    $s resize 2 4
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "AB  \n    "
+
+test resize-1.5 {cursor clamps to new dimensions} -body {
+    set s [::laterm::Screen new 5 10]
+    $s moveCursor 4 9
+    $s resize 2 3
+
+    set result [$s cursor]
+    $s destroy
+    set result
+} -result {1 2}
+
+test resize-1.6 {wide glyph truncated safely} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "ABC中"
+    $s resize 1 4
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "ABC " 1]
+
+test resize-1.7 {wide glyph preserved when it fits} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "AB中"
+    $s resize 1 4
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "AB中·" 1]
+
+test resize-1.8 {primary buffer resized while alternate active} -body {
+    set s [::laterm::Screen new 2 5]
+    $s print "SHELL"
+    $s enterAlternate
+    $s resize 3 7
+    $s leaveAlternate
+
+    set result [list [$s dimensions] [$s dump]]
+    $s destroy
+    set result
+} -result [list {3 7} "SHELL  \n       \n       "]
+
+test resize-1.9 {alternate buffer resized while primary active} -body {
+    set s [::laterm::Screen new 2 5]
+    $s enterAlternate
+    $s print "EDIT"
+    $s leaveAlternate
+    $s resize 3 7
+    $s enterAlternate
+
+    set result [list [$s dimensions] [$s dump]]
+    $s destroy
+    set result
+} -result [list {3 7} "EDIT   \n       \n       "]
+
+test resize-1.10 {resize marks entire screen dirty} -body {
+    set s [::laterm::Screen new 2 4]
+    $s consumeDirty
+    $s resize 3 5
+
+    set result [dict get [$s consumeDirty] rows]
+    $s destroy
+    set result
+} -result {0 {{0 4}} 1 {{0 4}} 2 {{0 4}}}
+
+test resize-1.11 {invalid dimensions rejected} -body {
+    set s [::laterm::Screen new 2 4]
+
+    set result [catch {$s resize 0 5}]
+    $s destroy
+    set result
+} -result 1
+
+test resize-1.12 {scrollback survives resize} -body {
+    set s [::laterm::Screen new 2 4 10]
+    $s print "ABCD"
+    $s scrollUp
+    $s resize 3 6
+
+    set result [list \
+        [$s scrollbackSize] \
+        [$s dumpScrollback]]
+
+    $s destroy
+    set result
+} -result [list 1 "ABCD"]
+
+::tcltest::cleanupTests
+
