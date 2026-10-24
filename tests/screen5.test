@@ -1,0 +1,111 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+source [file join \
+    [file dirname [info script]] .. "render/screen.tcl"]
+
+test unicode-screen-1.1 {wide character occupies two cells} -body {
+    set s [::laterm::Screen new 2 6]
+    $s print "A中B"
+
+    set result [list \
+        [dict get [$s cell 0 1] width] \
+        [dict get [$s cell 0 2] width] \
+        [$s cursor] \
+        [$s dumpCells]]
+
+    $s destroy
+    set result
+} -result [list 2 0 {0 4} "A中·B  \n      "]
+
+test unicode-screen-1.2 {combining mark} -body {
+    set s [::laterm::Screen new 1 5]
+    $s print "e\u0301"
+
+    set result [list \
+        [dict get [$s cell 0 0] text] \
+        [$s cursor]]
+
+    $s destroy
+    set result
+} -result [list "e\u0301" {0 1}]
+
+test unicode-screen-1.3 {wide character wraps} -body {
+    set s [::laterm::Screen new 2 4]
+    $s print "ABC中"
+
+    set result [list [$s dumpCells] [$s cursor]]
+    $s destroy
+    set result
+} -result [list "ABC \n中·  " {1 2}]
+
+test unicode-screen-1.4 {overwrite wide leading cell} -body {
+    set s [::laterm::Screen new 1 5]
+    $s print "中AB"
+    $s moveCursor 0 0
+    $s print X
+
+    set result [$s dumpCells]
+    $s destroy
+    set result
+} -result "X AB "
+
+test unicode-screen-1.5 {overwrite continuation cell} -body {
+    set s [::laterm::Screen new 1 5]
+    $s print "中AB"
+    $s moveCursor 0 1
+    $s print X
+
+    set result [$s dumpCells]
+    $s destroy
+    set result
+} -result " XAB "
+
+test unicode-screen-1.6 {wide character at right edge} -body {
+    set s [::laterm::Screen new 2 4]
+    $s print "AB中"
+
+    set result [list \
+        [$s cursor] \
+        [$s pendingWrap]]
+
+    $s destroy
+    set result
+} -result [list {0 3} 1]
+
+test unicode-screen-1.7 {combining mark after wide glyph} -body {
+    set s [::laterm::Screen new 1 4]
+    $s print "中\u0301"
+
+    set result [list \
+        [dict get [$s cell 0 0] text] \
+        [$s cursor]]
+
+    $s destroy
+    set result
+} -result [list "中\u0301" {0 2}]
+
+test unicode-screen-1.8 {wide glyph dirty range} -body {
+    set s [::laterm::Screen new 2 6]
+    $s consumeDirty
+    $s print 中
+
+    set changes [$s consumeDirty]
+    $s destroy
+
+    dict get $changes rows
+} -result {0 {{0 1}}}
+
+test unicode-screen-1.9 {ASCII remains compatible} -body {
+    set s [::laterm::Screen new 2 4]
+    $s print "ABCD"
+    $s print "E"
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "ABCD\nE   "
+
+::tcltest::cleanupTests
+

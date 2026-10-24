@@ -1,0 +1,124 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+source [file join \
+    [file dirname [info script]] .. "render/screen.tcl"]
+
+test screen3-1.1 {erase line from cursor} -body {
+    set s [::laterm::Screen new 1 5]
+    $s print "ABCDE"
+    $s moveCursor 0 2
+    $s eraseInLine 0
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "AB   "
+
+test screen3-1.2 {erase entire display} -body {
+    set s [::laterm::Screen new 2 3]
+    $s print "ABCDEF"
+    $s eraseInDisplay 2
+
+    set result [list [$s dump] [$s cursor]]
+    $s destroy
+    set result
+} -result [list "   \n   " {1 2}]
+
+test screen3-1.3 {erase characters} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "ABCDEF"
+    $s moveCursor 0 2
+    $s eraseCharacters 2
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "AB  EF"
+
+test screen3-1.4 {insert characters} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "ABCDEF"
+    $s moveCursor 0 2
+    $s insertCharacters 2
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "AB  CD"
+
+test screen3-1.5 {delete characters} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "ABCDEF"
+    $s moveCursor 0 2
+    $s deleteCharacters 2
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "ABEF  "
+
+test screen3-1.6 {insert line in region} -body {
+    set s [::laterm::Screen new 5 3]
+    $s print "AAABBBCCCDDDEEE"
+
+    $s setScrollRegion 1 3
+    $s moveCursor 2 0
+    $s insertLines 1
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "AAA\nBBB\n   \nCCC\nEEE"
+
+test screen3-1.7 {delete line in region} -body {
+    set s [::laterm::Screen new 5 3]
+    $s print "AAABBBCCCDDDEEE"
+
+    $s setScrollRegion 1 3
+    $s moveCursor 2 0
+    $s deleteLines 1
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "AAA\nBBB\nDDD\n   \nEEE"
+
+test screen3-1.8 {line editing outside region} -body {
+    set s [::laterm::Screen new 5 3]
+    $s print "AAABBBCCCDDDEEE"
+
+    $s setScrollRegion 1 3
+    $s moveCursor 4 1
+    $s insertLines 1
+    $s deleteLines 1
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "AAA\nBBB\nCCC\nDDD\nEEE"
+
+test screen3-1.9 {count zero means one} -body {
+    set s [::laterm::Screen new 1 5]
+    $s print "ABCDE"
+    $s moveCursor 0 1
+    $s deleteCharacters 0
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "ACDE "
+
+test screen3-1.10 {erase before cursor} -body {
+    set s [::laterm::Screen new 2 4]
+    $s print "ABCDEFGH"
+    $s moveCursor 1 1
+    $s eraseInDisplay 1
+
+    set result [$s dump]
+    $s destroy
+    set result
+} -result "    \n  GH"
+
+::tcltest::cleanupTests
