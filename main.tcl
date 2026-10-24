@@ -5,6 +5,8 @@ lappend auto_path [file dirname [info script]]
 package require pty
 
 source parser.tcl 
+source resize_controller.tcl
+source render/screen.tcl 
 
 # setup vars
 #
@@ -13,6 +15,8 @@ set pty_chan [lindex $pty_pair 0]
 set pty_file [lindex $pty_pair 1]
 
 set parser [::LATerm::Parser new onTerminalEvent]
+
+set screen [::laterm::Screen new 24 80]
 
 
 # LATerm lifecycle state
@@ -216,16 +220,22 @@ proc readpty {} {
 fconfigure $pty_chan -translation binary -blocking no -buffering none
 fileevent $pty_chan readable readpty
 
-set master $pty_chan
-set slave $pty_file
+set pid [pty::spawn $pty_chan $pty_file /bin/bash -i]
 
-set pid [pty::spawn $master $slave /bin/bash -i]
-
+pty::resize $::pty_chan 40 120
 after 200 checkChild 
 
 wm title . 'LATerm'
 wm protocol . WM_DELETE_WINDOW shutdownTerminal
 text .terminal
+
+set fontName [.terminal cget -font]
+set cellWidth  [font measure $fontName "M"]
+set cellHeight [font metrics $fontName -linespace]
+
+set resizeController [::laterm::ResizeController new .terminal $screen $pty_chan]
+
+.terminal configure -wrap none
 pack .terminal -fill both -expand true
 bind .terminal <Key> {sendkey %K %A %s}
 
