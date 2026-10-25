@@ -4,9 +4,16 @@ package require Tk
 lappend auto_path [file dirname [info script]]
 package require pty
 
-source parser.tcl 
-source resize_controller.tcl
-source render/screen.tcl 
+source parser.tcl
+source render/resize_controller.tcl
+source render/screen.tcl
+source render/tk_renderer.tcl
+source render/screen_adapter.tcl
+source keyboard_encoder.tcl
+source clipboard_controller.tcl
+
+
+text .terminal
 
 # setup vars
 #
@@ -14,16 +21,53 @@ set pty_pair [pty::open]
 set pty_chan [lindex $pty_pair 0]
 set pty_file [lindex $pty_pair 1]
 
-set parser [::LATerm::Parser new onTerminalEvent]
-
-set screen [::laterm::Screen new 24 80]
-
+set screen   [::laterm::Screen new 24 80]
+set adapter  [::LATerm::ScreenAdapter new $screen [list sendTerminalResponse $pty_chan]]
+set parser   [::LATerm::Parser new [list $adapter event]]
+set renderer [::laterm::TkRenderer new .terminal $screen]
+set keyboard [::LATerm::KeyboardEncoder new $screen]
+set clipboard [::LATerm::ClipboardController new $screen]
 
 # LATerm lifecycle state
 set ::shuttingDown 0
 set ::childReaped 0
 set ::ptyClosed 0
 set ::shutdownAttempts 0
+
+
+proc handleTerminalKey {widget channel encoder keysym character state} {
+    set shift [expr {($state & 0x0001) != 0}]
+    set alt   [expr {($state & 0x0008) != 0}]
+    set ctrl  [expr {($state & 0x0004) != 0}]
+
+    if {$keysym eq "ISO_Left_Tab"} {
+        set keysym "Tab"
+        set shift 0
+    }
+
+    set sequence [$encoder encode $keysym $character $shift $alt $ctrl]
+
+    if {$sequence ne ""} {
+        set bytes [ encoding convertto utf-8 $sequence]
+        if {[catch {
+            puts -nonewline $channel $bytes
+            flush $channel
+            } err]} {
+            puts stderr "Keyboard PTY write error: $err"
+        }
+    }
+
+    return -code break
+}
+
+proc sendTerminalResponse {channel data} {
+    if {[catch {
+        puts -nonewline $channel $data
+        flush $channel
+    } err]} {
+        puts stderr "PTY response error: $err"
+    }
+}
 
 proc closePty {} {
     if {$::ptyClosed} {
@@ -104,7 +148,6 @@ proc checkChild {} {
 
     if {$result ne "running"} {
         set ::childReaped 1
-        puts "Shell exited: $result"
         terminalExited
         return
     }
@@ -112,9 +155,6 @@ proc checkChild {} {
     after 200 checkChild
 }
 
-proc onTerminalEvent {args} {
-    puts "TERMINAL: $args"
-}
 proc controlCharacter {keysym} {
     set key [string toupper $keysym]
 
@@ -211,13 +251,12 @@ proc readpty {} {
         return
     }
 
-    # Temporary rendering until ANSI parsing is integrated.
-    .terminal insert end $data
-    .terminal see end
+    $::parser feed $data 
+    $::renderer renderDirty
 }
 
 
-fconfigure $pty_chan -translation binary -blocking no -buffering none
+fconfigure $pty_chan -translation binary -blocking no -buffering none -encoding binary
 fileevent $pty_chan readable readpty
 
 set pid [pty::spawn $pty_chan $pty_file /bin/bash -i]
@@ -227,7 +266,6 @@ after 200 checkChild
 
 wm title . 'LATerm'
 wm protocol . WM_DELETE_WINDOW shutdownTerminal
-text .terminal
 
 set fontName [.terminal cget -font]
 set cellWidth  [font measure $fontName "M"]
@@ -237,5 +275,15 @@ set resizeController [::laterm::ResizeController new .terminal $screen $pty_chan
 
 .terminal configure -wrap none
 pack .terminal -fill both -expand true
-bind .terminal <Key> {sendkey %K %A %s}
+bind .terminal <KeyPress> {handleTerminalKey %W $::pty_chan $keyboard %K %A %s}
+bind .terminal <Control-Shift-KeyPress-v> {
+    ::LATerm::ClipboardController paste %W $::pty_chan
+    break
+
+}
+bind .terminal <Control-Shift-KeyPress-c> {
+    ::LATerm::ClipboardController copySelection %W
+    break
+}
+focus .terminal
 

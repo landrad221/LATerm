@@ -12,6 +12,10 @@ oo::class create ::laterm::Screen {
     variable scrollback scrollbackLimit
     variable savedCursor
     variable mode1049Active
+    variable cursorVisible
+    variable applicationCursorKeys
+    variable bracketedPaste
+
 
     constructor {height width {historyLimit 1000}} {
         if {![string is integer -strict $historyLimit] ||
@@ -25,11 +29,14 @@ oo::class create ::laterm::Screen {
             error "screen dimensions must be positive integers"
         }
 
+        set cursorVisible 1
         set rows $height
         set cols $width
         set cursorRow 0
         set cursorCol 0
         set wrapPending 0
+        set applicationCursorKeys 0
+        set bracketedPaste 0
 
         set scrollTop 0
         set scrollBottom [expr {$rows - 1}]
@@ -63,7 +70,24 @@ oo::class create ::laterm::Screen {
     }
 
 
+method bracketedPaste {} {
+    return $bracketedPaste
+}
+
+method setBracketedPaste {enabled} {
+    set bracketedPaste [expr {$enabled ? 1 : 0}]
+}
+
     
+
+method applicationCursorKeys {} {
+    return $applicationCursorKeys
+}
+
+method setApplicationCursorKeys {enabled} {
+    set applicationCursorKeys [expr {$enabled ? 1 : 0}]
+}
+
 method resize {newRows newCols} {
     if {![string is integer -strict $newRows] ||
         ![string is integer -strict $newCols] ||
@@ -120,7 +144,48 @@ method resize {newRows newCols} {
     set cursorDirty 1
 }
 
-    
+
+method cursorVisible {} {
+    return $cursorVisible
+}
+
+method setCursorVisible {visible} {
+    set visible [expr {$visible ? 1 : 0}]
+
+    if {$cursorVisible != $visible} {
+        set cursorVisible $visible
+        set cursorDirty 1
+    }
+}
+
+
+method setAttributes {changes} {
+    dict for {name value} $changes {
+        if {$name ni {
+            fg bg bold italic underline inverse
+        }} {
+            error "Unknown cell attribute: $name"
+        }
+
+        dict set attrs $name $value
+    }
+}
+
+method resetAttributes {} {
+    set attrs [dict create \
+        fg default \
+        bg default \
+        bold 0 \
+        italic 0 \
+        underline 0 \
+        inverse 0]
+}
+
+method currentAttributes {} {
+    return $attrs
+}
+
+
 method saveCursorState {} {
     set savedCursor [dict create \
         row $cursorRow \
@@ -180,6 +245,12 @@ method setPrivateMode {mode enabled} {
     set enabled [expr {!!$enabled}]
 
     switch -- $mode {
+        1 {
+            my setApplicationCursorKeys $enabled
+        }
+        25 {
+            my setCursorVisible $enabled
+        }
         47 {
             if {$enabled} {
                 my enterAlternate
@@ -220,6 +291,10 @@ method setPrivateMode {mode enabled} {
                     set mode1049Active 0
                 }
             }
+        }
+        
+        2004 {
+           my setBracketedPaste $enabled
         }
 
         default {
