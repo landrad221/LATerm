@@ -4,9 +4,9 @@ namespace import ::tcltest::test
 
 set root [file dirname [file dirname [info script]]]
 
-source [file join $root screen.tcl]
+source [file join $root render/screen.tcl]
 source [file join $root parser.tcl]
-source [file join $root screen_adapter.tcl]
+source [file join $root render/screen_adapter.tcl]
 source [file join $root clipboard_controller.tcl]
 
 proc clipboardPipeline {} {

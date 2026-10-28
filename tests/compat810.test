@@ -1,0 +1,325 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+
+source [file join $root render/screen.tcl]
+source [file join $root parser.tcl]
+source [file join $root render/screen_adapter.tcl]
+
+proc compatPipeline {} {
+    set s [::laterm::Screen new 24 80]
+    set a [::LATerm::ScreenAdapter new $s]
+    set p [::LATerm::Parser new [list $a event]]
+    return [list $s $a $p]
+}
+
+proc compatCleanup {objects} {
+    foreach obj [lreverse $objects] {
+        $obj destroy
+    }
+}
+
+proc compatRow {screen row} {
+    set result ""
+    lassign [$screen dimensions] rows cols
+
+    for {set col 0} {$col < $cols} {incr col} {
+        set cell [$screen cell $row $col]
+        set width [dict get $cell width]
+
+        if {$width == 0} {
+            continue
+        }
+
+        set value [dict get $cell text]
+        if {$value eq ""} {
+            set value " "
+        }
+        append result $value
+    }
+
+    return $result
+}
+
+test compat-1.1 {basic full-screen printing} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "LATerm"
+    set result [string range [compatRow $s 0] 0 5]
+
+    compatCleanup $objects
+    set result
+} -result "LATerm"
+
+test compat-1.2 {absolute cursor positioning} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[5;10HABC"
+
+    set result [string range [compatRow $s 4] 9 11]
+
+    compatCleanup $objects
+    set result
+} -result "ABC"
+
+test compat-1.3 {erase entire display} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "VISIBLE"
+    $p feed "\033\[2J"
+
+    set result [string trim [compatRow $s 0]]
+
+    compatCleanup $objects
+    set result
+} -result ""
+
+test compat-1.4 {erase to end of line} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "ABCDEFGHIJ"
+    $p feed "\033\[1;5H\033\[K"
+
+    set result [string trimright [compatRow $s 0]]
+
+    compatCleanup $objects
+    set result
+} -result "ABCD"
+
+test compat-1.5 {insert characters} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "ABCDE"
+    $p feed "\033\[1;3H\033\[2@"
+
+    set result [string range [compatRow $s 0] 0 6]
+
+    compatCleanup $objects
+    set result
+} -result "AB  CDE"
+
+test compat-1.6 {delete characters} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "ABCDEFG"
+    $p feed "\033\[1;3H\033\[2P"
+
+    set result [string range [compatRow $s 0] 0 4]
+
+    compatCleanup $objects
+    set result
+} -result "ABEFG"
+
+test compat-1.7 {alternate screen restores primary} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "PRIMARY"
+    $p feed "\033\[?1049h"
+    $p feed "ALTERNATE"
+
+    set alternate [string range [compatRow $s 0] 0 8]
+
+    $p feed "\033\[?1049l"
+
+    set primary [string range [compatRow $s 0] 0 6]
+
+    compatCleanup $objects
+    list $alternate $primary
+} -result [list "ALTERNATE" "PRIMARY"]
+
+test compat-1.8 {scroll region bounds} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[1;1HTOP"
+    $p feed "\033\[24;1HBOTTOM"
+    $p feed "\033\[2;23r"
+    $p feed "\033\[23;1H\n"
+
+    set top [string range [compatRow $s 0] 0 2]
+    set bottom [string range [compatRow $s 23] 0 5]
+
+    compatCleanup $objects
+    list $top $bottom
+} -result [list "TOP" "BOTTOM"]
+
+
+test compat-1.9 {UTF-8 C1 control does not reach Screen.print} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    # UTF-8 encoded U+0097 (EPA).
+    set bytes [binary format H* c297]
+
+    set rc [catch {$p feed $bytes} err]
+    set contents [string trim [compatRow $s 0]]
+
+    compatCleanup $objects
+
+    list $rc $contents
+} -result [list 0 ""]
+
+
+test compat-1.10 {printable UTF-8 survives control filtering} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    set bytes [encoding convertto utf-8 "Olá"]
+
+    set rc [catch {$p feed $bytes} err]
+    set contents [string range [compatRow $s 0] 0 2]
+
+    compatCleanup $objects
+
+    list $rc $contents
+} -result [list 0 "Olá"]
+
+
+test compat-1.11 {OSC queries must not appear on screen} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "BEFORE"
+    $p feed "\033]10;?\007"
+    $p feed "\033]11;?\007"
+    $p feed "AFTER"
+
+    set result [string range [compatRow $s 0] 0 10]
+
+    compatCleanup $objects
+    set result
+} -result "BEFOREAFTER"
+
+test compat-1.12 {OSC terminated by ST does not leak} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "BEFORE"
+    $p feed "\033]10;?\033\\"
+    $p feed "AFTER"
+
+    set result [string range [compatRow $s 0] 0 10]
+
+    compatCleanup $objects
+    set result
+} -result "BEFOREAFTER"
+
+test compat-1.13 {OSC split across feed calls} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "A\033]"
+    $p feed "10;"
+    $p feed "?\007B"
+
+    set result [string range [compatRow $s 0] 0 1]
+
+    compatCleanup $objects
+    set result
+} -result "AB"
+
+test compat-1.14 {cancelled OSC does not leak} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "A\033]10;?"
+    $p feed "\030B"
+
+    set result [string range [compatRow $s 0] 0 1]
+
+    compatCleanup $objects
+    set result
+} -result "AB"
+
+test compat-1.12 {OSC terminated by ST does not leak} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "BEFORE"
+    $p feed "\033]10;?\033\\"
+    $p feed "AFTER"
+
+    set result [string range [compatRow $s 0] 0 10]
+
+    compatCleanup $objects
+    set result
+} -result "BEFOREAFTER"
+
+test compat-1.13 {OSC split across feed calls} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "A\033]"
+    $p feed "10;"
+    $p feed "?\007B"
+
+    set result [string range [compatRow $s 0] 0 1]
+
+    compatCleanup $objects
+    set result
+} -result "AB"
+
+test compat-1.14 {cancelled OSC does not leak} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "A\033]10;?"
+    $p feed "\030B"
+
+    set result [string range [compatRow $s 0] 0 1]
+
+    compatCleanup $objects
+    set result
+} -result "AB"
+
+test compat-1.12 {OSC terminated by ST does not leak} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "BEFORE"
+    $p feed "\033]10;?\033\\"
+    $p feed "AFTER"
+
+    set result [string range [compatRow $s 0] 0 10]
+
+    compatCleanup $objects
+    set result
+} -result "BEFOREAFTER"
+
+test compat-1.13 {OSC split across feed calls} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "A\033]"
+    $p feed "10;"
+    $p feed "?\007B"
+
+    set result [string range [compatRow $s 0] 0 1]
+
+    compatCleanup $objects
+    set result
+} -result "AB"
+
+test compat-1.14 {cancelled OSC does not leak} -body {
+    set objects [compatPipeline]
+    lassign $objects s a p
+
+    $p feed "A\033]10;?"
+    $p feed "\030B"
+
+    set result [string range [compatRow $s 0] 0 1]
+
+    compatCleanup $objects
+    set result
+} -result "AB"
+
+::tcltest::cleanupTests
