@@ -7,6 +7,7 @@ oo::class create ::laterm::TkRenderer {
     variable widget screen
     variable styleCache styleCount fontCache
     variable renderedRows renderedCols
+    variable cursorOverlay
 
     constructor {textWidget screenObject} {
         set widget $textWidget
@@ -16,6 +17,7 @@ oo::class create ::laterm::TkRenderer {
         set fontCache {}
         set renderedRows -1
         set renderedCols -1
+        set cursorOverlay ""
 
         $widget configure \
             -wrap none \
@@ -27,6 +29,11 @@ oo::class create ::laterm::TkRenderer {
             -background [$widget cget -foreground]
         # Perform an initial full redraw.
         my render
+    }
+    
+
+    method setCursorOverlay {overlayObject} {
+        set cursorOverlay $overlayObject
     }
 
     # Convert one logical screen row into Tk text.
@@ -103,15 +110,21 @@ method render {} {
 
     $screen consumeDirty
     my updateCursor
+
     $widget tag raise sel
 
-    $widget tag raise latermCursor
+    if {$cursorOverlay ne ""} {
+        $cursorOverlay updatePosition
+    } else {
+        $widget tag raise latermCursor
+    }
 }
+
 
 method renderDirty {} {
     lassign [$screen dimensions] rows cols
 
-    # Resizing requires rebuilding the Text line structure.
+    # Resizing requires a full redraw.
     if {$rows != $renderedRows || $cols != $renderedCols} {
         my render
         return
@@ -128,8 +141,17 @@ method renderDirty {} {
         [dict size $dirtyRows] > 0} {
         my updateCursor
     }
+
+    # Update the overlay after text and cursor positioning.
+    if {$cursorOverlay ne ""} {
+        $cursorOverlay updatePosition
+    }
+
     $widget tag raise sel
-    $widget tag raise latermCursor 
+
+    if {$cursorOverlay eq ""} {
+        $widget tag raise latermCursor
+    }
 }
 
 
@@ -149,10 +171,9 @@ method updateCursor {} {
         return
     }
 
-    # A wide glyph occupies two terminal cells,
-    # but only one character in the Tk Text widget.
     set cell [$screen cell $row $col]
 
+    # Handle wide-character continuation cells.
     if {[dict get $cell width] == 0 && $col > 0} {
         incr col -1
     }
@@ -163,14 +184,16 @@ method updateCursor {} {
     set start "$line.$index"
     set end "$line.[expr {$index + 1}]"
 
-    $widget tag add latermCursor $start $end
-
-    # Ensure the cursor highlight takes precedence
-    # over normal foreground/background style tags.
-    $widget tag raise latermCursor
-
+    # Keep the Tk insertion mark synchronized.
     $widget mark set insert $start
     $widget see $start
+
+    # Draw the legacy block cursor only when
+    # no overlay is registered.
+    if {$cursorOverlay eq ""} {
+        $widget tag add latermCursor $start $end
+        $widget tag raise latermCursor
+    }
 }
 
 method styleTag {attributes} {
@@ -285,6 +308,20 @@ method renderStyledRow {row} {
     }
 
     $widget configure -state disabled
+}
+
+method cursorIndex {} {
+    lassign [$screen cursor] row col
+
+    set cell [$screen cell $row $col]
+
+    if {[dict get $cell width] == 0 && $col > 0} {
+        incr col -1
+    }
+
+    set index [my columnToIndex $row $col]
+
+    return "[expr {$row + 1}].$index"
 }
 
 destructor {

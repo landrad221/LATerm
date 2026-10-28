@@ -198,6 +198,22 @@ oo::class create ::LATerm::ScreenAdapter {
             return
         }
 
+
+        # DECSCUSR: CSI Ps SP q
+        if {$final eq "q" && $intermediates eq " "} {
+            if {$params eq ""} {
+                set style 0
+            } elseif {[regexp {^[0-6]$} $params]} {
+                set style $params
+            } else {
+                return
+            }
+
+            $screen setCursorStyle $style
+            return
+        }
+
+
         if {$intermediates ne ""} {
             return
         }

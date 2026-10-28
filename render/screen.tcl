@@ -17,6 +17,7 @@ oo::class create ::laterm::Screen {
     variable bracketedPaste
     variable mouseModes
     variable focusReporting
+    variable cursorStyle
 
     constructor {height width {historyLimit 1000}} {
         if {![string is integer -strict $historyLimit] ||
@@ -38,6 +39,7 @@ oo::class create ::laterm::Screen {
         set wrapPending 0
         set applicationCursorKeys 0
         set bracketedPaste 0
+        set cursorStyle 1
         set mouseModes [dict create \
                              1000 0 \
                              1002 0 \
@@ -75,6 +77,36 @@ oo::class create ::laterm::Screen {
         set savedCursor {}
         set mode1049Active 0
     }
+
+
+method setCursorStyle {style} {
+    if {![string is integer -strict $style]} {
+        return
+    }
+
+    if {$style < 0 || $style > 6} {
+        return
+    }
+
+    set cursorStyle $style
+}
+
+method cursorStyle {} {
+    return $cursorStyle
+}
+
+method cursorShape {} {
+    switch -- $cursorStyle {
+        0 - 1 - 2 { return block }
+        3 - 4     { return underline }
+        5 - 6     { return bar }
+    }
+}
+
+method cursorBlinking {} {
+    return [expr {$cursorStyle in {0 1 3 5}}]
+}
+
 
 method setFocusReporting {enabled} {
     set focusReporting [expr {$enabled ? 1 : 0}]

@@ -14,6 +14,10 @@ source clipboard_controller.tcl
 source render/mouse_encoder.tcl
 source render/mouse_controller.tcl
 source focus_controller.tcl
+source cursor_overlay.tcl
+
+set cursorCanvas [canvas .cursorOverlay]
+
 
 proc ::LATerm::writeToPty {channel data} {
     puts -nonewline $channel $data
@@ -41,6 +45,13 @@ set focusController [::LATerm::FocusController new \
 
 set mouseController [::LATerm::MouseController new \
     .terminal $screen $mouseEncoder $pty_chan]
+
+set cursorOverlay [::laterm::CursorOverlay new \
+    .cursorOverlay .terminal $renderer $screen]
+
+$renderer setCursorOverlay $cursorOverlay
+$renderer updateCursor
+$cursorOverlay refresh
 
 # LATerm lifecycle state
 set ::shuttingDown 0
