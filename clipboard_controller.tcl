@@ -2,10 +2,11 @@
 namespace eval ::LATerm {}
 
 oo::class create ::LATerm::ClipboardController {
-    variable screen
+    variable screen writer
 
-    constructor {screenObject} {
+    constructor {screenObject writerObject} {
         set screen $screenObject
+        set writer $writerObject
     }
 
     method encodePaste {text} {
@@ -20,27 +21,26 @@ oo::class create ::LATerm::ClipboardController {
         return [encoding convertto utf-8 $text]
     }
 
-method paste {widget channel} {
-    if {[catch {
-        clipboard get -displayof $widget
-    } text]} {
-        puts stderr "LATerm: clipboard unavailable: $text"
-        return
-    }
+    method paste {widget} {
+        if {[catch {
+            clipboard get -displayof $widget
+        } text]} {
+            puts stderr "LATerm: clipboard unavailable: $text"
+            return
+        }
 
-    set bytes [my encodePaste $text]
+        set bytes [my encodePaste $text]
 
-    if {$bytes eq ""} {
-        return
-    }
+        if {$bytes eq ""} {
+            return
+        }
 
-    if {[catch {
-        puts -nonewline $channel $bytes
-        flush $channel
-    } err]} {
-        puts stderr "LATerm: PTY paste error: $err"
+        if {[catch {
+            $writer send $bytes
+        } err]} {
+            puts stderr "LATerm: PTY paste error: $err"
+        }
     }
-}
  
     method copySelection {widget} {
         if {[catch {
