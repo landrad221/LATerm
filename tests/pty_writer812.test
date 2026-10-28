@@ -37,9 +37,26 @@ proc writerCleanup {objects} {
 
 # Run idle callbacks and collect available bytes.
 proc writerRead {reader} {
-    update idletasks
-    return [read $reader]
+    set result ""
+
+    for {set i 0} {$i < 100} {incr i} {
+        update idletasks
+
+        set chunk [read $reader]
+
+        if {$chunk ne ""} {
+            append result $chunk
+        }
+
+        # Allow queued idle callbacks to execute.
+        if {$chunk eq ""} {
+            break
+        }
+    }
+
+    return $result
 }
+
 
 test pty-writer-1.1 {writer starts open} -body {
     set objects [writerPipeline]
@@ -267,5 +284,81 @@ test pty-writer-1.15 {destroy cancels pending idle callback} -body {
 
     set failed
 } -result 0
+
+
+
+test pty-writer-2.1 {large payload preserves bytes} -body {
+    set objects [writerPipeline 262144]
+    lassign $objects reader sender writer
+
+    set payload [string repeat "A" 32768]
+    $writer send $payload
+
+    set received ""
+
+    for {set i 0} {$i < 1000} {incr i} {
+        update
+        append received [read $reader]
+
+        if {[string length $received] == 32768} {
+            break
+        }
+    }
+
+    set result [list \
+        [string length $received] \
+        [expr {$received eq $payload}]]
+
+    writerCleanup $objects
+    set result
+} -result {32768 1}
+
+test pty-writer-2.2 {large binary payload preserves bytes} -body {
+    set objects [writerPipeline 262144]
+    lassign $objects reader sender writer
+
+    set pattern [binary format H* "00ff1b5b41"]
+    set payload [string repeat $pattern 4096]
+
+    $writer send $payload
+
+    set received ""
+
+    for {set i 0} {$i < 1000} {incr i} {
+        update
+        append received [read $reader]
+
+        if {[string bytelength $received] ==
+            [string bytelength $payload]} {
+            break
+        }
+    }
+
+    set result [expr {
+        [binary encode hex $received] eq
+        [binary encode hex $payload]
+    }]
+
+    writerCleanup $objects
+    set result
+} -result 1
+
+test pty-writer-2.3 {close unregisters writable callback} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send [string repeat "X" 65536]
+
+    update idletasks
+
+    $writer close
+
+    set callback [fileevent $sender writable]
+
+    writerCleanup $objects
+
+    set callback
+} -result {}
+
 
 ::tcltest::cleanupTests
