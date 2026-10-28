@@ -16,6 +16,7 @@ oo::class create ::laterm::Screen {
     variable applicationCursorKeys
     variable bracketedPaste
     variable mouseModes
+    variable focusReporting
 
     constructor {height width {historyLimit 1000}} {
         if {![string is integer -strict $historyLimit] ||
@@ -45,6 +46,7 @@ oo::class create ::laterm::Screen {
 
         set scrollTop 0
         set scrollBottom [expr {$rows - 1}]
+        set focusReporting 0
 
         set attrs [dict create \
             fg default bg default \
@@ -74,7 +76,13 @@ oo::class create ::laterm::Screen {
         set mode1049Active 0
     }
 
+method setFocusReporting {enabled} {
+    set focusReporting [expr {$enabled ? 1 : 0}]
+}
 
+method focusReporting {} {
+    return $focusReporting
+}
 
 method setMouseMode {mode enabled} {
     if {![dict exists $mouseModes $mode]} {
@@ -295,6 +303,9 @@ method setPrivateMode {mode enabled} {
             } else {
                 my leaveAlternate
             }
+        }
+        1004 {
+            my setFocusReporting $enabled
         }
 
         1047 {

@@ -1,4 +1,27 @@
-namespace eval ::LATerm {}
+namespace eval ::LATerm {
+    set defaultForeground "#e5e7eb"
+    set defaultBackground "#111827"
+}
+
+
+
+proc ::LATerm::hexToOscRgb {hex} {
+    if {![regexp {
+        ^#([0-9a-fA-F]{2})
+          ([0-9a-fA-F]{2})
+          ([0-9a-fA-F]{2})$
+    } $hex -> r g b]} {
+        # Use the compact form below if Tcl's regexp
+        # whitespace handling is not configured.
+        if {![regexp {^#(..)(..)(..)$} $hex -> r g b]} {
+            error "Expected #RRGGBB color"
+        }
+    }
+
+    return [format "rgb:%s%s/%s%s/%s%s" \
+        $r $r $g $g $b $b]
+}
+
 
 oo::class create ::LATerm::ScreenAdapter {
     variable screen utf8Buffer responseCallback
@@ -49,6 +72,9 @@ oo::class create ::LATerm::ScreenAdapter {
                 lassign $args params intermediates final
                 my csi $params $intermediates $final
             }
+            osc {
+                my osc {*}$args
+            }
         }
     }
 
@@ -90,24 +116,24 @@ oo::class create ::LATerm::ScreenAdapter {
             return
         }
 
-# Do not forward Unicode control characters to Screen.print.
-# C0 and C1 controls belong to the terminal control layer.
-set printable ""
+        # Do not forward Unicode control characters to Screen.print.
+        # C0 and C1 controls belong to the terminal control layer.
+        set printable ""
 
-foreach char [split $decoded ""] {
-    scan $char %c cp
+        foreach char [split $decoded ""] {
+            scan $char %c cp
 
-    if {$cp < 0x20 ||
-        ($cp >= 0x7F && $cp <= 0x9F)} {
-        continue
-    }
+            if {$cp < 0x20 ||
+                ($cp >= 0x7F && $cp <= 0x9F)} {
+                continue
+            }
 
-    append printable $char
-}
+            append printable $char
+        }
 
-if {$printable ne ""} {
-    $screen print $printable
-}
+        if {$printable ne ""} {
+            $screen print $printable
+        }
 
 
     }
@@ -160,30 +186,34 @@ if {$printable ne ""} {
 
     method csi {params intermediates final} {
         if {[string index $params 0] eq "?" && $intermediates eq ""} {
-        if {$final eq "h" || $final eq "l"} {
-            set enabled [expr {$final eq "h"}]
+            if {$final eq "h" || $final eq "l"} {
+                set enabled [expr {$final eq "h"}]
 
-            foreach mode [split [string range $params 1 end] ";"] {
-                if {[string is integer -strict $mode]} {
-                    $screen setPrivateMode $mode $enabled
+                foreach mode [split [string range $params 1 end] ";"] {
+                    if {[string is integer -strict $mode]} {
+                        $screen setPrivateMode $mode $enabled
+                    }
                 }
             }
+            return
         }
-        return
-    }
 
-    if {$intermediates ne ""} {
-        return
-    }
+        if {$intermediates ne ""} {
+            return
+        }
 
-    set values [split $params ";"]
-    set n [my parameter $values 0]
+        if {$params eq ">" && $intermediates eq "" && $final eq "c"} {
+            my respond "\033\[>0;0;0c"
+            return
+        }
 
-    lassign [$screen cursor] row col
-    lassign [$screen dimensions] rows cols
+        set values [split $params ";"]
+        set n [my parameter $values 0]
 
+        lassign [$screen cursor] row col
+        lassign [$screen dimensions] rows cols
 
-           switch -exact -- $final {
+        switch -exact -- $final {
             A {
                 $screen moveCursor \
                     [expr {max(0, $row - $n)}] $col
@@ -278,10 +308,10 @@ if {$printable ne ""} {
                 my sgr $params
             }
             n {
-               my deviceStatusReport $params
+            my deviceStatusReport $params
             }
             c {
-              my deviceAttributes $params
+            my deviceAttributes $params
             }
 
             default {
@@ -464,6 +494,19 @@ if {$printable ne ""} {
         # Respond to primary DA queries only.
         if {$params eq "" || $params eq "0"} {
             my respond "\033\[?1;2c"
+        }
+    }
+
+    method osc {payload} {
+        
+        switch -- $payload {
+            "10;?" {
+                my respond "\033]10;[::LATerm::hexToOscRgb $::LATerm::defaultForeground]\007"
+            }
+
+            "11;?" {
+                my respond "\033]11;[::LATerm::hexToOscRgb $::LATerm::defaultBackground]\007"
+            }
         }
     }
 }

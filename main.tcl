@@ -13,6 +13,12 @@ source keyboard_encoder.tcl
 source clipboard_controller.tcl
 source render/mouse_encoder.tcl
 source render/mouse_controller.tcl
+source focus_controller.tcl
+
+proc ::LATerm::writeToPty {channel data} {
+    puts -nonewline $channel $data
+    flush $channel
+}
 
 
 text .terminal
@@ -30,6 +36,8 @@ set renderer [::laterm::TkRenderer new .terminal $screen]
 set keyboard [::LATerm::KeyboardEncoder new $screen]
 set clipboard [::LATerm::ClipboardController new $screen]
 set mouseEncoder [::LATerm::MouseEncoder new $screen]
+set focusController [::LATerm::FocusController new \
+    $screen [list ::LATerm::writeToPty $pty_chan]]
 
 set mouseController [::LATerm::MouseController new \
     .terminal $screen $mouseEncoder $pty_chan]
@@ -39,7 +47,6 @@ set ::shuttingDown 0
 set ::childReaped 0
 set ::ptyClosed 0
 set ::shutdownAttempts 0
-
 
 proc handleTerminalKey {widget channel encoder keysym character state} {
     set shift [expr {($state & 0x0001) != 0}]
@@ -141,7 +148,6 @@ proc finishShutdown {} {
     after 100 finishShutdown
 }
 
-
 proc checkChild {} {
     if {$::shuttingDown || $::childReaped} {
         return
@@ -203,22 +209,22 @@ proc sendkey {keysym char state} {
             }
         }
     }
-if {$::shuttingDown || $::ptyClosed} {
-    return -code break
-}
+    if {$::shuttingDown || $::ptyClosed} {
+        return -code break
+    }
 
-# Verify that the channel still exists.
-if {$::pty_chan ni [chan names]} {
-    return -code break
-}
+    # Verify that the channel still exists.
+    if {$::pty_chan ni [chan names]} {
+        return -code break
+    }
 
-# Handle a channel that closes or fails during writing.
-if {[catch {
-    puts -nonewline $::pty_chan $data
-} err]} {
-    puts stderr "PTY write error: $err"
-    return -code break
-}
+    # Handle a channel that closes or fails during writing.
+    if {[catch {
+        puts -nonewline $::pty_chan $data
+    } err]} {
+        puts stderr "PTY write error: $err"
+        return -code break
+    }
 
     return -code break
 }
@@ -261,7 +267,6 @@ proc readpty {} {
     $::renderer renderDirty
 }
 
-
 fconfigure $pty_chan -translation binary -blocking no -buffering none -encoding binary
 fileevent $pty_chan readable readpty
 
@@ -284,17 +289,10 @@ set resizeController [::laterm::ResizeController new .terminal $screen $pty_chan
     -selectbackground "#365a85" \
     -selectforeground "#ffffff" \
     -inactiveselectbackground "#365a85" \
-    -exportselection 1
+    -exportselection 1 \
+    -takefocus 1
 
-bind .terminal <Control-Shift-KeyPress-V> {
-    $clipboard paste %W $pty_chan
-    break
-}
 
-bind .terminal <Control-Shift-KeyPress-C> {
-    $clipboard copySelection %W
-    break
-}
 pack .terminal -fill both -expand true
 bind .terminal <KeyPress> {handleTerminalKey %W $::pty_chan $keyboard %K %A %s}
 focus .terminal
@@ -342,4 +340,22 @@ bind LATermMouse <ButtonPress-4> {
 
 bind LATermMouse <ButtonPress-5> {
     if {[$mouseController wheel wheel-down %x %y %s]} break
+}
+
+bind .terminal <FocusIn> {
+    $focusController send 1
+}
+
+bind .terminal <FocusOut> {
+    $focusController send 0
+}
+
+bind .terminal <Control-Shift-KeyPress-V> {
+    $clipboard paste %W $pty_chan
+    break
+}
+
+bind .terminal <Control-Shift-KeyPress-C> {
+    $clipboard copySelection %W
+    break
 }
