@@ -1,0 +1,130 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+
+source [file join $root render/screen.tcl]
+source [file join $root parser.tcl]
+source [file join $root render/screen_adapter.tcl]
+source [file join $root focus_controller.tcl]
+
+proc focusPipeline {} {
+    set s [::laterm::Screen new 24 80]
+    set a [::LATerm::ScreenAdapter new $s]
+    set p [::LATerm::Parser new [list $a event]]
+    return [list $s $a $p]
+}
+
+proc focusCleanup {objects} {
+    foreach obj [lreverse $objects] {
+        $obj destroy
+    }
+}
+
+proc focusCapture {data} {
+    lappend ::focusOutput $data
+}
+
+test focus-1.1 {focus reporting disabled by default} -body {
+    set s [::laterm::Screen new 24 80]
+    set result [$s focusReporting]
+    $s destroy
+    set result
+} -result 0
+
+test focus-1.2 {DECSET 1004 enables focus reporting} -body {
+    set objects [focusPipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[?1004h"
+    set result [$s focusReporting]
+
+    focusCleanup $objects
+    set result
+} -result 1
+
+test focus-1.3 {DECRST 1004 disables focus reporting} -body {
+    set objects [focusPipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[?1004h"
+    $p feed "\033\[?1004l"
+
+    set result [$s focusReporting]
+
+    focusCleanup $objects
+    set result
+} -result 0
+
+test focus-1.4 {focus gained sends CSI I} -body {
+    set s [::laterm::Screen new 24 80]
+    $s setFocusReporting 1
+
+    set ::focusOutput {}
+    set controller [::LATerm::FocusController new \
+        $s ::focusCapture]
+
+    $controller send 1
+
+    set result $::focusOutput
+
+    $controller destroy
+    $s destroy
+    set result
+} -result [list "\033\[I"]
+
+test focus-1.5 {focus lost sends CSI O} -body {
+    set s [::laterm::Screen new 24 80]
+    $s setFocusReporting 1
+
+    set ::focusOutput {}
+    set controller [::LATerm::FocusController new \
+        $s ::focusCapture]
+
+    $controller send 0
+
+    set result $::focusOutput
+
+    $controller destroy
+    $s destroy
+    set result
+} -result [list "\033\[O"]
+
+test focus-1.6 {no focus event when disabled} -body {
+    set s [::laterm::Screen new 24 80]
+
+    set ::focusOutput {}
+    set controller [::LATerm::FocusController new \
+        $s ::focusCapture]
+
+    $controller send 1
+
+    set result $::focusOutput
+
+    $controller destroy
+    $s destroy
+    set result
+} -result {}
+
+test focus-1.7 {duplicate focus events are suppressed} -body {
+    set s [::laterm::Screen new 24 80]
+    $s setFocusReporting 1
+
+    set ::focusOutput {}
+    set controller [::LATerm::FocusController new \
+        $s ::focusCapture]
+
+    $controller send 1
+    $controller send 1
+    $controller send 0
+    $controller send 0
+
+    set result $::focusOutput
+
+    $controller destroy
+    $s destroy
+    set result
+} -result [list "\033\[I" "\033\[O"]
+
+::tcltest::cleanupTests
