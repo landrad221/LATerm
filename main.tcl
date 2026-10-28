@@ -27,7 +27,8 @@ set pty_pair [pty::open]
 set pty_chan [lindex $pty_pair 0]
 set pty_file [lindex $pty_pair 1]
 
-set writer [::LATerm::PtyWriter new $pty_chan]
+set writer [::LATerm::PtyWriter new $pty_chan \
+    1048576 ::LATerm::onPtyWriterFailure]
 
 set screen   [::laterm::Screen new 24 80]
 set adapter  [::LATerm::ScreenAdapter new $screen [list $writer send]]

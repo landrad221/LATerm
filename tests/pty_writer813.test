@@ -205,4 +205,103 @@ test pty-lifecycle-2.4 {broken pipe reports failure} -body {
 } -result {0 failed 1 1}
 
 
+namespace eval ::WriterFailureTest {
+    variable messages {}
+}
+
+proc ::WriterFailureTest::notify {message} {
+    variable messages
+    lappend messages $message
+}
+
+test pty-lifecycle-3.1 {normal close does not notify} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    set ::WriterFailureTest::messages {}
+
+    # Recreate with a callback.
+    $writer destroy
+    set writer [::LATerm::PtyWriter new \
+        $sender 1048576 ::WriterFailureTest::notify]
+
+    $writer close
+
+    set result $::WriterFailureTest::messages
+
+    lifecycleCleanup [list $reader $sender $writer]
+    set result
+} -result {}
+
+test pty-lifecycle-3.2 {failure notifies exactly once} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    set ::WriterFailureTest::messages {}
+
+    $writer destroy
+    set writer [::LATerm::PtyWriter new \
+        $sender 1048576 ::WriterFailureTest::notify]
+
+    $writer fail "broken PTY"
+    $writer fail "another failure"
+
+    set result [list \
+        $::WriterFailureTest::messages \
+        [$writer state]]
+
+    lifecycleCleanup [list $reader $sender $writer]
+    set result
+} -result {{{broken PTY}} failed}
+
+test pty-lifecycle-3.3 {callback observes closed writer} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer destroy
+
+    set ::WriterFailureTest::observed {}
+
+    set writer [::LATerm::PtyWriter new \
+        $sender 1048576 \
+        [list apply {{writerVar message} {
+            upvar #0 $writerVar writer
+            set ::WriterFailureTest::observed \
+                [list [$writer isClosed] [$writer state]]
+        }} ::WriterFailureTest::currentWriter]]
+
+    set ::WriterFailureTest::currentWriter $writer
+
+    $writer fail "I/O failure"
+
+    set result $::WriterFailureTest::observed
+
+    lifecycleCleanup [list $reader $sender $writer]
+    set result
+} -result {1 failed}
+
+test pty-lifecycle-3.4 {callback error does not escape} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer destroy
+
+    set writer [::LATerm::PtyWriter new \
+        $sender 1048576 \
+        [list apply {{message} {
+            error "callback failure"
+        }}]]
+
+    set escaped [catch {
+        $writer fail "write failure"
+    }]
+
+    set result [list $escaped [$writer state]]
+
+    lifecycleCleanup [list $reader $sender $writer]
+    set result
+} -result {0 failed}
+
+
+
 ::tcltest::cleanupTests

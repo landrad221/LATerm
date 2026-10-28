@@ -1,19 +1,33 @@
 
 namespace eval ::LATerm {}
 
+proc ::LATerm::onPtyWriteFailure {message} {
+    puts stderr "LATerm: PTY write failure: $message"
+
+    if {$::shuttingDown} {
+        return
+    }
+
+    # Schedule shutdown rather than entering it
+    # recursively from a writer callback.
+    after idle terminalExited
+}
+
 oo::class create ::LATerm::PtyWriter {
     variable channel queue scheduled closed
     variable maxPending idleCallback
     variable chunkSize writableArmed
     variable queuedBytes
     variable failed errorMessage
+    variable failureCallback
 
-    constructor {ptyChannel {limit 1048576}} {
+    constructor {ptyChannel {limit 1048576} {onFailure {}}} {
         set channel $ptyChannel
         set queue {}
         set queuedBytes 0
         set scheduled 0
         set closed 0
+        set failureCallback $onFailure
         set maxPending $limit
         set idleCallback ""
         set chunkSize 4096
@@ -176,8 +190,20 @@ oo::class create ::LATerm::PtyWriter {
 
         set failed 1
         set errorMessage $message
-        puts stderr "LATerm PTY writer error: $message"
         my close
+
+        puts stderr "LATerm PTY writer error: $message"
+
+
+        if {$failureCallback ne ""} {
+            if {[catch {
+                {*}$failureCallback $message
+            } callbackError]} {
+                puts stderr \
+                    "LATerm PTY failure callback error: $callbackError"
+            }
+        }
+        
     }
 
     method pending {} {
