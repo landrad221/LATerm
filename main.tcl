@@ -15,6 +15,8 @@ source render/mouse_encoder.tcl
 source render/mouse_controller.tcl
 source focus_controller.tcl
 source cursor_overlay.tcl
+source pty_writer.tcl
+
 
 set cursorCanvas [canvas .cursorOverlay]
 
@@ -33,18 +35,21 @@ set pty_pair [pty::open]
 set pty_chan [lindex $pty_pair 0]
 set pty_file [lindex $pty_pair 1]
 
+set writer [::LATerm::PtyWriter new $pty_chan]
+
 set screen   [::laterm::Screen new 24 80]
-set adapter  [::LATerm::ScreenAdapter new $screen [list sendTerminalResponse $pty_chan]]
+set adapter  [::LATerm::ScreenAdapter new $screen [list $writer send]]
 set parser   [::LATerm::Parser new [list $adapter event]]
 set renderer [::laterm::TkRenderer new .terminal $screen]
 set keyboard [::LATerm::KeyboardEncoder new $screen]
-set clipboard [::LATerm::ClipboardController new $screen]
+set clipboard [::LATerm::ClipboardController new $screen $writer]
 set mouseEncoder [::LATerm::MouseEncoder new $screen]
 set focusController [::LATerm::FocusController new \
-    $screen [list ::LATerm::writeToPty $pty_chan]]
+    $screen [list $writer send  ]]
+
 
 set mouseController [::LATerm::MouseController new \
-    .terminal $screen $mouseEncoder $pty_chan]
+    .terminal $screen $mouseEncoder $writer]
 
 set cursorOverlay [::laterm::CursorOverlay new \
     .cursorOverlay .terminal $renderer $screen]
@@ -73,12 +78,7 @@ proc handleTerminalKey {widget channel encoder keysym character state} {
 
     if {$sequence ne ""} {
         set bytes [ encoding convertto utf-8 $sequence]
-        if {[catch {
-            puts -nonewline $channel $bytes
-            flush $channel
-            } err]} {
-            puts stderr "Keyboard PTY write error: $err"
-        }
+        $writer send $bytes
     }
 
     return -code break
@@ -102,6 +102,8 @@ proc closePty {} {
 
     # Disable callbacks before closing the channel.
     catch {fileevent $::pty_chan readable {}}
+    catch {$::writer close}
+
     catch {close $::pty_chan}
 }
 
@@ -362,7 +364,7 @@ bind .terminal <FocusOut> {
 }
 
 bind .terminal <Control-Shift-KeyPress-V> {
-    $clipboard paste %W $pty_chan
+    $clipboard paste %W
     break
 }
 

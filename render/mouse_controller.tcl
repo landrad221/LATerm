@@ -4,14 +4,14 @@ package require Tk
 namespace eval ::LATerm {}
 
 oo::class create ::LATerm::MouseController {
-    variable widget screen encoder channel
+    variable widget screen encoder writer
     variable pressedButton lastPosition
 
-    constructor {textWidget screenObject mouseEncoder ptyChannel} {
+    constructor {textWidget screenObject mouseEncoder writerObject} {
         set widget $textWidget
         set screen $screenObject
         set encoder $mouseEncoder
-        set channel $ptyChannel
+        set writer $writerObject
 
         set pressedButton 0
         set lastPosition {}
@@ -97,8 +97,7 @@ oo::class create ::LATerm::MouseController {
 
         if {$data ne ""} {
             if {[catch {
-                puts -nonewline $channel $data
-                flush $channel
+                $writer send $data
             } err]} {
                 puts stderr "LATerm mouse PTY error: $err"
             }
