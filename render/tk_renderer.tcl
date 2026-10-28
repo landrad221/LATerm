@@ -103,6 +103,9 @@ method render {} {
 
     $screen consumeDirty
     my updateCursor
+    $widget tag raise sel
+
+    $widget tag raise latermCursor
 }
 
 method renderDirty {} {
@@ -125,6 +128,8 @@ method renderDirty {} {
         [dict size $dirtyRows] > 0} {
         my updateCursor
     }
+    $widget tag raise sel
+    $widget tag raise latermCursor 
 }
 
 

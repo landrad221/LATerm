@@ -15,7 +15,7 @@ oo::class create ::laterm::Screen {
     variable cursorVisible
     variable applicationCursorKeys
     variable bracketedPaste
-
+    variable mouseModes
 
     constructor {height width {historyLimit 1000}} {
         if {![string is integer -strict $historyLimit] ||
@@ -37,6 +37,11 @@ oo::class create ::laterm::Screen {
         set wrapPending 0
         set applicationCursorKeys 0
         set bracketedPaste 0
+        set mouseModes [dict create \
+                             1000 0 \
+                             1002 0 \
+                             1003 0 \
+                             1006 0]
 
         set scrollTop 0
         set scrollBottom [expr {$rows - 1}]
@@ -68,6 +73,39 @@ oo::class create ::laterm::Screen {
         set savedCursor {}
         set mode1049Active 0
     }
+
+
+
+method setMouseMode {mode enabled} {
+    if {![dict exists $mouseModes $mode]} {
+        return
+    }
+
+    dict set mouseModes $mode [expr {$enabled ? 1 : 0}]
+}
+
+method mouseMode {mode} {
+    if {![dict exists $mouseModes $mode]} {
+        return 0
+    }
+
+    return [dict get $mouseModes $mode]
+}
+
+method mouseTrackingMode {} {
+    # Choose the most comprehensive enabled tracking mode.
+    foreach mode {1003 1002 1000} {
+        if {[dict get $mouseModes $mode]} {
+            return $mode
+        }
+    }
+
+    return 0
+}
+
+method mouseReportingEnabled {} {
+    return [expr {[my mouseTrackingMode] != 0}]
+}
 
 
 method bracketedPaste {} {
@@ -296,6 +334,12 @@ method setPrivateMode {mode enabled} {
         2004 {
            my setBracketedPaste $enabled
         }
+        1000 -
+        1002 -
+        1003 -
+        1006 {
+            my setMouseMode $mode $enabled
+        }   
 
         default {
             # Ignore unsupported DEC private modes for now.

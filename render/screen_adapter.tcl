@@ -90,7 +90,26 @@ oo::class create ::LATerm::ScreenAdapter {
             return
         }
 
-        $screen print $decoded
+# Do not forward Unicode control characters to Screen.print.
+# C0 and C1 controls belong to the terminal control layer.
+set printable ""
+
+foreach char [split $decoded ""] {
+    scan $char %c cp
+
+    if {$cp < 0x20 ||
+        ($cp >= 0x7F && $cp <= 0x9F)} {
+        continue
+    }
+
+    append printable $char
+}
+
+if {$printable ne ""} {
+    $screen print $printable
+}
+
+
     }
 
     method control {name} {
