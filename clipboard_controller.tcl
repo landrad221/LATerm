@@ -20,28 +20,28 @@ oo::class create ::LATerm::ClipboardController {
         return [encoding convertto utf-8 $text]
     }
 
-    method paste {widget channel} {
-        if {[catch {
-            clipboard get -displayof $widget
-        } text]} {
-            # Clipboard is empty or unavailable.
-            return
-        }
-
-        set bytes [my encodePaste $text]
-
-        if {$bytes eq ""} {
-            return
-        }
-
-        if {[catch {
-            puts -nonewline $channel $bytes
-            flush $channel
-        } err]} {
-            puts stderr "Clipboard paste error: $err"
-        }
+method paste {widget channel} {
+    if {[catch {
+        clipboard get -displayof $widget
+    } text]} {
+        puts stderr "LATerm: clipboard unavailable: $text"
+        return
     }
 
+    set bytes [my encodePaste $text]
+
+    if {$bytes eq ""} {
+        return
+    }
+
+    if {[catch {
+        puts -nonewline $channel $bytes
+        flush $channel
+    } err]} {
+        puts stderr "LATerm: PTY paste error: $err"
+    }
+}
+ 
     method copySelection {widget} {
         if {[catch {
             $widget get sel.first sel.last
