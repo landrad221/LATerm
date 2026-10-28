@@ -2,9 +2,11 @@ namespace eval ::LATerm {}
 
  oo::class create ::LATerm::Parser {
     variable state params intermediates callback
+    variable oscBuffer
 
     constructor {handler} {
         set callback $handler
+        set oscBuffer ""
         my reset
     }
 
@@ -45,6 +47,11 @@ namespace eval ::LATerm {}
                     }
                 }
                 ESCAPE {
+                    if {$b == 0x5D} {
+                        set oscBuffer ""
+                        set state OSC_STRING
+                        continue
+                    }
                     if {$b < 0x20} {
                         my emit control [my controlName $b]
                     } elseif {$b == 0x5b} {
@@ -81,6 +88,65 @@ namespace eval ::LATerm {}
                         my reset
                     } else { my reset }
                 }
+                OSC_STRING {
+                    if {$b == 0x07} {
+                        # BEL terminates OSC.
+                        my emit osc $oscBuffer
+                        set oscBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    if {$b == 0x1B} {
+                        # ESC may begin the ST terminator.
+                        set state OSC_ESC
+                        continue
+                    }
+
+                    if {$b == 0x18 || $b == 0x1A} {
+                        # CAN / SUB cancel the control string.
+                        set oscBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    # OSC payload is consumed, never printed.
+                    append oscBuffer [format %c $b]
+                    continue
+                }
+
+
+                OSC_ESC {
+                    if {$b == 0x5C} {
+                        # ESC \ terminates OSC.
+                        my emit osc $oscBuffer
+                        set oscBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    if {$b == 0x07} {
+                        # Also accept BEL after ESC.
+                        my emit osc $oscBuffer
+                        set oscBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    if {$b == 0x18 || $b == 0x1A} {
+                        set oscBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    # ESC was not followed by a valid terminator.
+                    # Resume OSC consumption without leaking bytes.
+                    append oscBuffer "\033"
+                    append oscBuffer [format %c $b]
+                    set state OSC_STRING
+                    continue
+                }
+
             }
         }
     }
