@@ -3,10 +3,12 @@ namespace eval ::LATerm {}
  oo::class create ::LATerm::Parser {
     variable state params intermediates callback
     variable oscBuffer
+    variable dcsBuffer
 
     constructor {handler} {
         set callback $handler
         set oscBuffer ""
+        set dcsBuffer ""
         my reset
     }
 
@@ -50,6 +52,11 @@ namespace eval ::LATerm {}
                     if {$b == 0x5D} {
                         set oscBuffer ""
                         set state OSC_STRING
+                        continue
+                    }
+                    if {$b == 0x50} {
+                        set dcsBuffer ""
+                        set state DCS_STRING
                         continue
                     }
                     if {$b < 0x20} {
@@ -146,7 +153,46 @@ namespace eval ::LATerm {}
                     set state OSC_STRING
                     continue
                 }
+                DCS_STRING {
+                    if {$b == 0x1B} {
+                        set state DCS_ESC
+                        continue
+                    }
 
+                    if {$b == 0x18 || $b == 0x1A} {
+                        # CAN/SUB cancel the DCS sequence.
+                        set dcsBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    # Consume DCS payload, never print it.
+                    append dcsBuffer [format %c $b]
+                    continue
+                }
+
+                DCS_ESC {
+                    if {$b == 0x5C} {
+                        # ESC \ terminates DCS.
+                        my emit dcs $dcsBuffer
+                        set dcsBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    if {$b == 0x18 || $b == 0x1A} {
+                        set dcsBuffer ""
+                        set state GROUND
+                        continue
+                    }
+
+                    # Unexpected ESC sequence inside DCS:
+                    # keep consuming until ST.
+                    append dcsBuffer "\033"
+                    append dcsBuffer [format %c $b]
+                    set state DCS_STRING
+                    continue
+                }
             }
         }
     }
