@@ -6,6 +6,7 @@ oo::class create ::LATerm::PtyWriter {
     variable maxPending idleCallback
     variable chunkSize writableArmed
     variable queuedBytes
+    variable failed errorMessage
 
     constructor {ptyChannel {limit 1048576}} {
         set channel $ptyChannel
@@ -17,6 +18,8 @@ oo::class create ::LATerm::PtyWriter {
         set idleCallback ""
         set chunkSize 4096
         set writableArmed 0
+        set failed 0
+        set errorMessage ""
 
         fconfigure $channel \
             -blocking 0 \
@@ -35,10 +38,16 @@ oo::class create ::LATerm::PtyWriter {
         }
 
         set size [string bytelength $bytes]
+        set pending [my pending]
 
-        if {[my pending] + $size > $maxPending} {
+        if {$closed} {
+            error "PTY writer is closed"
+        }
+
+        if {$pending + $size > $maxPending} {
             error "PTY writer pending limit exceeded"
         }
+
 
         lappend queue $bytes
         incr queuedBytes $size
@@ -85,7 +94,11 @@ oo::class create ::LATerm::PtyWriter {
 
         # Do not add more data while Tcl still has
         # buffered output waiting for the channel.
-        if {[chan pending output $channel] > 0} {
+        if {[catch {chan pending output $channel} buffered]} {
+            my fail $buffered
+            return
+        }
+        if {$buffered > 0} {
             my armWritable
             return
         }
@@ -120,7 +133,9 @@ oo::class create ::LATerm::PtyWriter {
             set queue [lreplace $queue 0 0 $rest]
         }
 
-        if {[chan pending output $channel] > 0} {
+        if {[catch {chan pending output $channel} buffered]} {
+            my fail $buffered
+        } elseif {$buffered > 0} {
             my armWritable
         } elseif {[llength $queue] > 0} {
             my schedule
@@ -139,7 +154,11 @@ oo::class create ::LATerm::PtyWriter {
             return
         }
 
-        if {[chan pending output $channel] > 0} {
+        if {[catch {chan pending output $channel} buffered]} {
+            my fail $buffered
+            return
+        }
+        if {$buffered > 0} {
             return
         }
 
@@ -151,6 +170,12 @@ oo::class create ::LATerm::PtyWriter {
     }
 
     method fail {message} {
+        if {$closed} {
+            return
+        }
+
+        set failed 1
+        set errorMessage $message
         puts stderr "LATerm PTY writer error: $message"
         my close
     }
@@ -159,7 +184,12 @@ oo::class create ::LATerm::PtyWriter {
         set buffered 0
 
         if {!$closed} {
-            set buffered [chan pending output $channel]
+            if {[catch {
+                chan pending output $channel
+            } buffered]} {
+                my fail $buffered
+                return 0
+            }
         }
 
         return [expr {$queuedBytes + $buffered}]
@@ -186,6 +216,25 @@ oo::class create ::LATerm::PtyWriter {
         set scheduled 0
         set queue {}
         set queuedBytes 0
+    }
+    method hasFailed {} {
+       return $failed
+    }
+
+    method lastError {} {
+        return $errorMessage
+    }
+
+    method state {} {
+        if {$failed} {
+            return failed
+        }
+
+        if {$closed} {
+            return closed
+        }
+
+        return open
     }
 
     destructor {

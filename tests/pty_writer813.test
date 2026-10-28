@@ -1,0 +1,208 @@
+
+package require Tcl 8.6
+package require tcltest 2
+
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+source [file join $root pty_writer.tcl]
+
+proc lifecycleCreate {} {
+    lassign [chan pipe] reader sender
+
+    fconfigure $reader \
+        -blocking 0 -translation binary -encoding binary
+
+    fconfigure $sender \
+        -blocking 0 -translation binary -encoding binary
+
+    set writer [::LATerm::PtyWriter new $sender]
+
+    return [list $reader $sender $writer]
+}
+
+proc lifecycleCleanup {objects} {
+    lassign $objects reader sender writer
+
+    catch {$writer destroy}
+    catch {close $sender}
+    catch {close $reader}
+}
+
+test pty-lifecycle-1.1 {initial writer state} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    set result [list \
+        [$writer state] \
+        [$writer hasFailed] \
+        [$writer lastError]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {open 0 {}}
+
+test pty-lifecycle-1.2 {normal closure is not failure} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer close
+
+    set result [list \
+        [$writer state] \
+        [$writer hasFailed] \
+        [$writer lastError]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {closed 0 {}}
+
+test pty-lifecycle-1.3 {failure records original error} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer fail "simulated I/O failure"
+
+    set result [list \
+        [$writer state] \
+        [$writer hasFailed] \
+        [$writer lastError] \
+        [$writer isClosed]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {failed 1 {simulated I/O failure} 1}
+
+test pty-lifecycle-1.4 {failure rejects further writes} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer fail "broken PTY"
+
+    set rejected [catch {
+        $writer send "hello"
+    } message]
+
+    set result [list \
+        $rejected \
+        $message \
+        [$writer state]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {1 {PTY writer is closed} failed}
+
+test pty-lifecycle-1.5 {normal close preserves failure state} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer fail "write failed"
+    $writer close
+    $writer close
+
+    set result [list \
+        [$writer state] \
+        [$writer lastError]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {failed {write failed}}
+
+
+
+test pty-lifecycle-2.1 {externally closed channel detected} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    # Simulate the channel disappearing unexpectedly.
+    close $sender
+
+    set rejected [catch {
+        $writer send "hello"
+    } message]
+
+    set result [list \
+        $rejected \
+        [$writer state] \
+        [$writer hasFailed] \
+        [expr {[$writer lastError] ne ""}]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {1 failed 1 1}
+
+
+test pty-lifecycle-2.2 {closed channel during queued write} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer send "queued data"
+
+    # Close before the idle callback executes.
+    close $sender
+
+    set callbackError [catch {
+        update idletasks
+    } message]
+
+    set result [list \
+        $callbackError \
+        [$writer state] \
+        [$writer hasFailed]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {0 failed 1}
+
+
+test pty-lifecycle-2.3 {failure cancels pending callbacks} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    $writer send [string repeat "X" 32768]
+
+    # Force a failure while output is still queued.
+    $writer fail "simulated channel failure"
+
+    set callbackError [catch {
+        update idletasks
+        update
+    } message]
+
+    set result [list \
+        $callbackError \
+        [$writer state] \
+        [$writer isClosed]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {0 failed 1}
+
+
+test pty-lifecycle-2.4 {broken pipe reports failure} -body {
+    set objects [lifecycleCreate]
+    lassign $objects reader sender writer
+
+    # Remove the receiving end of the pipe.
+    close $reader
+
+    $writer send "hello"
+
+    # Writing to a pipe with no reader should
+    # produce an I/O failure on Linux.
+    set callbackError [catch {
+        update idletasks
+    } message]
+
+    set result [list \
+        $callbackError \
+        [$writer state] \
+        [$writer hasFailed] \
+        [expr {[$writer lastError] ne ""}]]
+
+    lifecycleCleanup $objects
+    set result
+} -result {0 failed 1 1}
+
+
+::tcltest::cleanupTests
