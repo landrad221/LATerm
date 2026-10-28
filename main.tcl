@@ -11,6 +11,8 @@ source render/tk_renderer.tcl
 source render/screen_adapter.tcl
 source keyboard_encoder.tcl
 source clipboard_controller.tcl
+source render/mouse_encoder.tcl
+source render/mouse_controller.tcl
 
 
 text .terminal
@@ -27,6 +29,10 @@ set parser   [::LATerm::Parser new [list $adapter event]]
 set renderer [::laterm::TkRenderer new .terminal $screen]
 set keyboard [::LATerm::KeyboardEncoder new $screen]
 set clipboard [::LATerm::ClipboardController new $screen]
+set mouseEncoder [::LATerm::MouseEncoder new $screen]
+
+set mouseController [::LATerm::MouseController new \
+    .terminal $screen $mouseEncoder $pty_chan]
 
 # LATerm lifecycle state
 set ::shuttingDown 0
@@ -273,17 +279,67 @@ set cellHeight [font metrics $fontName -linespace]
 
 set resizeController [::laterm::ResizeController new .terminal $screen $pty_chan]
 
-.terminal configure -wrap none
+.terminal configure \
+    -wrap none \
+    -selectbackground "#365a85" \
+    -selectforeground "#ffffff" \
+    -inactiveselectbackground "#365a85" \
+    -exportselection 1
+
+bind .terminal <Control-Shift-KeyPress-V> {
+    $clipboard paste %W $pty_chan
+    break
+}
+
+bind .terminal <Control-Shift-KeyPress-C> {
+    $clipboard copySelection %W
+    break
+}
 pack .terminal -fill both -expand true
 bind .terminal <KeyPress> {handleTerminalKey %W $::pty_chan $keyboard %K %A %s}
-bind .terminal <Control-Shift-KeyPress-v> {
-    ::LATerm::ClipboardController paste %W $::pty_chan
-    break
-
-}
-bind .terminal <Control-Shift-KeyPress-c> {
-    ::LATerm::ClipboardController copySelection %W
-    break
-}
 focus .terminal
 
+
+# Install before the widget and Text class binding tags.
+set tags [bindtags .terminal]
+
+if {"LATermMouse" ni $tags} {
+    bindtags .terminal [linsert $tags 0 LATermMouse]
+}
+
+bind LATermMouse <ButtonPress-1> {
+    if {[$mouseController press 1 %x %y %s]} break
+}
+
+bind LATermMouse <ButtonRelease-1> {
+    if {[$mouseController release 1 %x %y %s]} break
+}
+
+bind LATermMouse <ButtonPress-2> {
+    if {[$mouseController press 2 %x %y %s]} break
+}
+
+bind LATermMouse <ButtonRelease-2> {
+    if {[$mouseController release 2 %x %y %s]} break
+}
+
+bind LATermMouse <ButtonPress-3> {
+    if {[$mouseController press 3 %x %y %s]} break
+}
+
+bind LATermMouse <ButtonRelease-3> {
+    if {[$mouseController release 3 %x %y %s]} break
+}
+
+bind LATermMouse <Motion> {
+    if {[$mouseController motion %x %y %s]} break
+}
+
+# X11 wheel events.
+bind LATermMouse <ButtonPress-4> {
+    if {[$mouseController wheel wheel-up %x %y %s]} break
+}
+
+bind LATermMouse <ButtonPress-5> {
+    if {[$mouseController wheel wheel-down %x %y %s]} break
+}
