@@ -1,0 +1,264 @@
+
+package require Tcl 8.6
+package require tcltest 2
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+
+source [file join $root render/screen.tcl]
+source [file join $root parser.tcl]
+source [file join $root render/screen_adapter.tcl]
+source [file join $root focus_controller.tcl]
+
+namespace eval ::vt811 {
+    variable replies {}
+    variable events {}
+}
+
+proc ::vt811::captureReply {data} {
+    variable replies
+    lappend replies $data
+}
+
+proc ::vt811::captureEvent {args} {
+    variable events
+    lappend events $args
+}
+
+proc ::vt811::pipeline {} {
+    variable replies
+    set replies {}
+
+    set screen [::laterm::Screen new 5 20]
+    set adapter [::LATerm::ScreenAdapter new \
+        $screen ::vt811::captureReply]
+    set parser [::LATerm::Parser new \
+        [list $adapter event]]
+
+    return [list $screen $adapter $parser]
+}
+
+proc ::vt811::cleanup {objects} {
+    foreach obj [lreverse $objects] {
+        catch {$obj destroy}
+    }
+}
+
+# DCS: no payload should appear on the screen.
+test vt811-1.1 {DCS does not leak text} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033Psecret\033\\"
+    $p feed "OK"
+
+    set result [list \
+        [dict get [$s cell 0 0] text] \
+        [dict get [$s cell 0 1] text]]
+
+    ::vt811::cleanup $objects
+    set result
+} -result {O K}
+
+test vt811-1.2 {DCS terminator across feeds} -body {
+    set ::vt811::events {}
+    set p [::LATerm::Parser new ::vt811::captureEvent]
+
+    $p feed "\033Pabc\033"
+    $p feed "\\"
+
+    set result $::vt811::events
+    $p destroy
+    set result
+} -result {{dcs abc}}
+
+test vt811-1.3 {DCS cancellation with CAN} -body {
+    set ::vt811::events {}
+    set p [::LATerm::Parser new ::vt811::captureEvent]
+
+    $p feed "\033Pdiscard\030"
+    $p feed "X"
+
+    set result [list [$p state] $::vt811::events]
+    $p destroy
+    set result
+} -result {GROUND {{print X}}}
+
+# Device attributes.
+test vt811-2.1 {secondary device attributes} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[>c"
+
+    set result $::vt811::replies
+    ::vt811::cleanup $objects
+    set result
+} -result [list "\033\[>0;0;0c"]
+
+test vt811-2.2 {primary device attributes} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[c"
+
+    set result $::vt811::replies
+    ::vt811::cleanup $objects
+    set result
+} -result [list "\033\[?1;2c"]
+
+# OSC color queries.
+test vt811-3.1 {OSC 10 foreground query} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]10;?\007"
+
+    set result $::vt811::replies
+    ::vt811::cleanup $objects
+    set result
+} -result [list "\033]10;rgb:e5e5/e7e7/ebeb\007"]
+
+test vt811-3.2 {OSC 11 background query} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]11;?\007"
+
+    set result $::vt811::replies
+    ::vt811::cleanup $objects
+    set result
+} -result [list "\033]11;rgb:1111/1818/2727\007"]
+
+test vt811-3.3 {OSC query terminated by ST} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]10;?\033\\"
+
+    set result [llength $::vt811::replies]
+    ::vt811::cleanup $objects
+    set result
+} -result 1
+
+# Focus reporting.
+test vt811-4.1 {DECSET and DECRST 1004} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[?1004h"
+    set enabled [$s focusReporting]
+
+    $p feed "\033\[?1004l"
+    set disabled [$s focusReporting]
+
+    ::vt811::cleanup $objects
+    list $enabled $disabled
+} -result {1 0}
+
+# Cursor styles.
+test vt811-5.1 {DECSCUSR steady block} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[2 q"
+
+    set result [list \
+        [$s cursorStyle] \
+        [$s cursorShape] \
+        [$s cursorBlinking]]
+
+    ::vt811::cleanup $objects
+    set result
+} -result {2 block 0}
+
+test vt811-5.2 {DECSCUSR blinking bar} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[5 q"
+
+    set result [list \
+        [$s cursorStyle] \
+        [$s cursorShape] \
+        [$s cursorBlinking]]
+
+    ::vt811::cleanup $objects
+    set result
+} -result {5 bar 1}
+
+test vt811-5.3 {invalid cursor style ignored} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[4 q"
+    $p feed "\033\[9 q"
+
+    set result [$s cursorStyle]
+    ::vt811::cleanup $objects
+    set result
+} -result 4
+
+# Cursor visibility.
+test vt811-6.1 {DECTCEM hide and show} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[?25l"
+    set hidden [$s cursorVisible]
+
+    $p feed "\033\[?25h"
+    set visible [$s cursorVisible]
+
+    ::vt811::cleanup $objects
+    list $hidden $visible
+} -result {0 1}
+
+# Interleaved terminal operations.
+test vt811-7.1 {control sequences do not leak} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "A"
+    $p feed "\033Pprivate\033\\"
+    $p feed "\033]10;?\007"
+    $p feed "\033\[6 q"
+    $p feed "B"
+
+    set result [list \
+        [dict get [$s cell 0 0] text] \
+        [dict get [$s cell 0 1] text] \
+        [$s cursorStyle]]
+
+    ::vt811::cleanup $objects
+    set result
+} -result {A B 6}
+
+test vt811-7.2 {parser returns to ground state} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033Pdata\033\\"
+    $p feed "\033]11;?\007"
+    $p feed "\033\[?1004h"
+
+    set result [$p state]
+    ::vt811::cleanup $objects
+    set result
+} -result GROUND
+
+test vt811-3.4 {OSC ST terminator across feeds} -body {
+    set objects [::vt811::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]10;?\033"
+    $p feed "\\"
+
+    set result [llength $::vt811::replies]
+
+    ::vt811::cleanup $objects
+    set result
+} -result 1
+
+::tcltest::cleanupTests
+

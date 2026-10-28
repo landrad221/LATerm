@@ -32,9 +32,21 @@ namespace eval ::LATerm {}
                 continue
             }
             if {$b == 0x1b} {
-                set state ESCAPE
-                set params ""
-                set intermediates ""
+                switch -- $state {
+                    OSC_STRING {
+                        set state OSC_ESC
+                    }
+
+                    DCS_STRING {
+                        set state DCS_ESC
+                    }
+
+                    default {
+                        set state ESCAPE
+                        set params ""
+                        set intermediates ""
+                    }
+                }
                 continue
             }
             switch -- $state {

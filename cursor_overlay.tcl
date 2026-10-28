@@ -7,7 +7,7 @@ oo::class create ::laterm::CursorOverlay {
     variable blinkVisible blinkTimer
     variable renderer
 
-    constructor {canvasWidget textWidgetPath rendererObject screenObject {color "#e5e7eb"}} {
+    constructor {canvasWidget textWidgetPath rendererObject screenObject {color "#1D4ED8"}} {
         set canvas $canvasWidget
         set textWidget $textWidgetPath
         set screen $screenObject
@@ -50,13 +50,20 @@ oo::class create ::laterm::CursorOverlay {
     }
 
     method blink {} {
-        set blinkTimer ""
+        
+        if {![$screen cursorVisible]} {
+            place forget $canvas
+            return
+         }
 
         if {![$screen cursorBlinking]} {
             set blinkVisible 1
             my draw
             return
         }
+
+        set blinkTimer ""
+         
 
         set blinkVisible [expr {!$blinkVisible}]
         my draw
@@ -65,6 +72,7 @@ oo::class create ::laterm::CursorOverlay {
     }
 
     method draw {} {
+
         if {!$blinkVisible} {
             place forget $canvas
             return
@@ -104,5 +112,7 @@ oo::class create ::laterm::CursorOverlay {
             -x $x -y $y \
             -width $cursorWidth \
             -height $cursorHeight
+        raise $canvas
     }
+    
 }
