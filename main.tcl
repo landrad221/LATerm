@@ -56,6 +56,29 @@ set ::shuttingDown 0
 set ::childReaped 0
 set ::ptyClosed 0
 set ::shutdownAttempts 0
+set ::childMonitorTimer ""
+set ::shutdownTimer ""
+
+proc cancelLifecycleTimer {variableName} {
+    upvar #0 $variableName timerId
+
+    if {$timerId ne ""} {
+        after cancel $timerId
+        set timerId ""
+    }
+}
+
+proc scheduleShutdownCheck {} {
+    if {![info exists ::shutdownTimer]} {
+        set ::shutdownTimer ""
+    }
+
+    if {$::shutdownTimer ne ""} {
+        return
+    }
+
+    set ::shutdownTimer [after 100 finishShutdown]
+}
 
 proc handleTerminalKey {widget writer encoder keysym character state} {
     set shift [expr {($state & 0x0001) != 0}]
@@ -98,6 +121,9 @@ proc terminalExited {} {
 
     set ::shuttingDown 1
 
+     # Stop periodic child monitoring.
+    cancelLifecycleTimer ::childMonitorTimer
+
     # Disable further keyboard input.
     bind .terminal <KeyPress> {}
 
@@ -106,7 +132,8 @@ proc terminalExited {} {
     # Hide the window while the child is reaped.
     wm withdraw .
 
-    after 100 finishShutdown
+
+    scheduleShutdownCheck
 }
 
 proc shutdownTerminal {} {
@@ -114,6 +141,12 @@ proc shutdownTerminal {} {
 }
 
 proc finishShutdown {} {
+    set ::shutdownTimer ""
+
+    if {!$::shuttingDown} {
+        return
+    }
+
     if {$::childReaped} {
         destroy .
         return
@@ -141,17 +174,19 @@ proc finishShutdown {} {
     if {$::shutdownAttempts == 20} {
         catch {pty::signal $::pid 9}
     }
-
-    after 100 finishShutdown
+    scheduleShutdownCheck
 }
 
 proc checkChild {} {
+    set ::childMonitorTimer ""
+
     if {$::shuttingDown || $::childReaped} {
         return
     }
 
     if {[catch {pty::wait $::pid} result]} {
         puts stderr "Child monitor error: $result"
+        terminalExited
         return
     }
 
@@ -161,7 +196,7 @@ proc checkChild {} {
         return
     }
 
-    after 200 checkChild
+    set ::childMonitorTimer [after 200 checkChild]
 }
 
 proc readpty {} {
@@ -200,7 +235,7 @@ fileevent $pty_chan readable readpty
 set pid [pty::spawn $pty_chan $pty_file /bin/bash -i]
 
 pty::resize $::pty_chan 40 120
-after 200 checkChild 
+set ::childMonitorTimer [after 200 checkChild]
 
 wm title . 'LATerm'
 wm protocol . WM_DELETE_WINDOW shutdownTerminal

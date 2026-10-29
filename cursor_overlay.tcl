@@ -50,6 +50,7 @@ oo::class create ::laterm::CursorOverlay {
     }
 
     method blink {} {
+        set blinkTimer ""
         
         if {![$screen cursorVisible]} {
             place forget $canvas
@@ -62,9 +63,6 @@ oo::class create ::laterm::CursorOverlay {
             return
         }
 
-        set blinkTimer ""
-         
-
         set blinkVisible [expr {!$blinkVisible}]
         my draw
 
@@ -73,7 +71,7 @@ oo::class create ::laterm::CursorOverlay {
 
     method draw {} {
 
-        if {!$blinkVisible} {
+         if {![$screen cursorVisible] || !$blinkVisible} {
             place forget $canvas
             return
         }
