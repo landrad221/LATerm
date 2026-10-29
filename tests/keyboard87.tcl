@@ -4,7 +4,7 @@ namespace import ::tcltest::test
 
 set root [file dirname [file dirname [info script]]]
 
-source [file join $root screen.tcl]
+source [file join $root render/screen.tcl]
 source [file join $root keyboard_encoder.tcl]
 
 proc keyboardPipeline {} {

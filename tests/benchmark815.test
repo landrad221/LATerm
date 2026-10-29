@@ -1,0 +1,116 @@
+
+#!/usr/bin/env tclsh
+
+# LATerm 8.15.1 - Screen model benchmark
+# Run: tclsh tests/benchmark815.tcl
+
+set root [file dirname [file dirname [info script]]]
+source [file join $root render/screen.tcl]
+
+namespace eval ::bench815 {
+    variable rows 24
+    variable cols 80
+}
+
+proc ::bench815::measure {name operations script} {
+    set start [clock microseconds]
+
+    uplevel 1 $script
+
+    set elapsed [expr {
+        ([clock microseconds] - $start) / 1000000.0
+    }]
+
+    set rate [expr {
+        $elapsed > 0 ? $operations / $elapsed : 0
+    }]
+
+    puts [format "%-24s %10.4f s %12.0f ops/s" \
+        $name $elapsed $rate]
+}
+
+proc ::bench815::newScreen {} {
+    variable rows
+    variable cols
+
+    return [::laterm::Screen new $rows $cols 0]
+}
+
+puts "LATerm 8.15.1 - Screen Model Benchmark"
+puts "Tcl version: [info patchlevel]"
+puts "Screen size: 24x80"
+puts "-----------------------------------------------"
+
+# 1. Sequential ASCII printing
+set s [::bench815::newScreen]
+
+set text [string repeat "A" 80]
+set iterations 1000
+
+::bench815::measure \
+    "Sequential printing" \
+    [expr {$iterations * 80}] {
+
+    for {set i 0} {$i < $iterations} {incr i} {
+        $s print $text
+    }
+}
+
+$s destroy
+
+# 2. Cursor positioning
+set s [::bench815::newScreen]
+
+set iterations 100000
+
+::bench815::measure \
+    "Cursor positioning" \
+    $iterations {
+
+    for {set i 0} {$i < $iterations} {incr i} {
+        $s moveCursor \
+            [expr {$i % 24}] \
+            [expr {$i % 80}]
+    }
+}
+
+$s destroy
+
+# 3. Scrolling
+set s [::bench815::newScreen]
+
+set iterations 2000
+
+::bench815::measure \
+    "Full-screen scrolling" \
+    $iterations {
+
+    for {set i 0} {$i < $iterations} {incr i} {
+        $s scrollUp 1
+    }
+}
+
+$s destroy
+
+# 4. Dirty tracking
+set s [::bench815::newScreen]
+
+set iterations 100000
+
+::bench815::measure \
+    "Dirty-state consumption" \
+    $iterations {
+
+    for {set i 0} {$i < $iterations} {incr i} {
+        $s moveCursor \
+            [expr {$i % 24}] \
+            [expr {$i % 80}]
+
+        $s consumeDirty
+    }
+}
+
+$s destroy
+
+puts "-----------------------------------------------"
+puts "Benchmark completed."
