@@ -738,8 +738,32 @@ method appendCombining {ch} {
             set ranges [dict get $dirtyRows $row]
         }
 
+
+        # Fast path: the new range extends or overlaps
+        # the final existing range.
+        #
+        # This is common during sequential printing.
+
+        if {[llength $ranges] > 0} {
+            set last [lindex $ranges end]
+            lassign $last lastStart lastEnd
+
+            if {$start >= $lastStart &&
+                $start <= $lastEnd + 1} {
+
+                if {$end > $lastEnd} {
+                    lset ranges end [list $lastStart $end]
+                    dict set dirtyRows $row $ranges
+                }
+
+                return
+            }
+        }
+
+        # General case: insert, sort and merge.
         lappend ranges [list $start $end]
         set ranges [lsort -integer -index 0 $ranges]
+
 
         set merged {}
 
@@ -1082,12 +1106,29 @@ method print {text} {
             my index
         }
 
-        # Clear any glyphs intersecting the target cells.
-        my clearGlyphAt $cursorRow $cursorCol
+ 
+        # A normal width-1 destination will be overwritten
+        # immediately, so clearing it first is unnecessary.
+        #
+        # Wide glyphs and continuation cells still require
+        # cleanup to preserve screen-grid invariants.
+
+        set existing [lindex $grid $cursorRow $cursorCol]
+        set existingWidth [dict get $existing width]
+
+        if {$existingWidth != 1} {
+            my clearGlyphAt $cursorRow $cursorCol
+        }
 
         if {$width == 2} {
-            my clearGlyphAt $cursorRow [expr {$cursorCol + 1}]
+            set nextCol [expr {$cursorCol + 1}]
+            set nextCell [lindex $grid $cursorRow $nextCol]
+
+            if {[dict get $nextCell width] != 1} {
+                my clearGlyphAt $cursorRow $nextCol
+            }
         }
+
 
         # Write the leading cell.
         set newCell [dict merge $attrs \
