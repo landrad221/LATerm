@@ -1,0 +1,167 @@
+
+package require Tcl 8.6
+package require tcltest 2
+
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+
+source [file join $root render/screen.tcl]
+source [file join $root parser.tcl]
+source [file join $root render/screen_adapter.tcl]
+
+namespace eval ::compat814 {
+    variable responses {}
+}
+
+proc ::compat814::capture {bytes} {
+    variable responses
+    lappend responses $bytes
+}
+
+proc ::compat814::pipeline {} {
+    variable responses
+    set responses {}
+
+    set screen [::laterm::Screen new 10 20]
+
+    set adapter [::LATerm::ScreenAdapter new \
+        $screen ::compat814::capture]
+
+    set parser [::LATerm::Parser new \
+        [list $adapter event]]
+
+    return [list $screen $adapter $parser]
+}
+
+proc ::compat814::cleanup {objects} {
+    foreach object [lreverse $objects] {
+        catch {$object destroy}
+    }
+}
+
+test compat814-1.1 {cursor visibility hide and show} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    set initial [$screen cursorVisible]
+
+    $parser feed "\033\[?25l"
+    set hidden [$screen cursorVisible]
+
+    $parser feed "\033\[?25h"
+    set restored [$screen cursorVisible]
+
+    ::compat814::cleanup $objects
+
+    list $initial $hidden $restored
+} -result {1 0 1}
+
+test compat814-1.2 {split cursor visibility sequence} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    $parser feed "\033\[?"
+    $parser feed "25"
+    $parser feed "l"
+
+    set result [$screen cursorVisible]
+
+    ::compat814::cleanup $objects
+    set result
+} -result 0
+
+test compat814-1.3 {DSR returns one-based coordinates} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    $parser feed "\033\[4;9H"
+    $parser feed "\033\[6n"
+
+    set result $::compat814::responses
+
+    ::compat814::cleanup $objects
+    set result
+} -result [list "\033\[4;9R"]
+
+test compat814-1.4 {split DSR produces one response} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    $parser feed "\033\[6"
+    set before $::compat814::responses
+
+    $parser feed "n"
+    set after $::compat814::responses
+
+    ::compat814::cleanup $objects
+
+    list $before $after
+} -result [list {} [list "\033\[1;1R"]]
+
+test compat814-1.5 {DA and DSR do not modify display} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    $parser feed "HELLO"
+    set before [$screen dump]
+
+    $parser feed "\033\[c"
+    $parser feed "\033\[5n"
+    $parser feed "\033\[6n"
+
+    set after [$screen dump]
+    set responses $::compat814::responses
+
+    ::compat814::cleanup $objects
+
+    list [expr {$before eq $after}] $responses
+} -result [list 1 [list \
+    "\033\[?1;2c" "\033\[0n" "\033\[1;6R"]]
+
+test compat814-1.6 {alternate screen restores cursor} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    $parser feed "\033\[3;7H"
+    set before [$screen cursor]
+
+    $parser feed "\033\[?1049h"
+    $parser feed "\033\[8;12H"
+    $parser feed "\033\[?1049l"
+
+    set after [$screen cursor]
+
+    ::compat814::cleanup $objects
+
+    list $before $after
+} -result {{2 6} {2 6}}
+
+test compat814-1.7 {cursor visibility survives screen changes} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    $parser feed "\033\[?25l"
+    $parser feed "\033\[2J"
+    $parser feed "\033\[5;10H"
+    $parser feed "TEXT"
+
+    set result [$screen cursorVisible]
+
+    ::compat814::cleanup $objects
+    set result
+} -result 0
+
+test compat814-1.8 {unknown DSR produces no response} -body {
+    set objects [::compat814::pipeline]
+    lassign $objects screen adapter parser
+
+    $parser feed "\033\[99n"
+
+    set result $::compat814::responses
+
+    ::compat814::cleanup $objects
+    set result
+} -result {}
+
+::tcltest::cleanupTests
