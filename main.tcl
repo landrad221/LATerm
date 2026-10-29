@@ -179,6 +179,40 @@ set ::pipelineStats [dict create \
     maxParseUs 0 \
     maxRenderUs 0]
 
+proc reportRendererStats {} {
+    set s [$::renderer statistics]
+
+    set rows [dict get $s styledRows]
+    set runs [dict get $s styleRuns]
+    set buildUs [dict get $s buildUs]
+    set tkUs [dict get $s tkUs]
+
+    puts stderr "\nLATerm renderer statistics"
+    puts stderr "---------------------------"
+    puts stderr "Full redraws: [dict get $s fullRedraws]"
+    puts stderr "Dirty render calls: [dict get $s dirtyRenders]"
+    puts stderr "Styled rows: $rows"
+    puts stderr "Style runs: $runs"
+
+    if {$rows > 0} {
+        puts stderr [format "Avg style runs/row: %.2f" \
+            [expr {double($runs) / $rows}]]
+
+        puts stderr [format "Avg row time: %.3f ms" \
+            [expr {($buildUs + $tkUs) / 1000.0 / $rows}]]
+    }
+
+    puts stderr [format "Row construction time: %.3f s" \
+        [expr {$buildUs / 1000000.0}]]
+
+    puts stderr [format "Tk command time: %.3f s" \
+        [expr {$tkUs / 1000000.0}]]
+
+    puts stderr [format "Maximum row time: %.3f ms" \
+        [expr {[dict get $s maxRowUs] / 1000.0}]]
+}
+
+
 proc reportPipelineStats {} {
     set s $::pipelineStats
 
@@ -279,6 +313,7 @@ proc terminalExited {} {
     cancelLifecycleTimer ::ptyResumeTimer
 
     reportPipelineStats
+    reportRendererStats
 
     set ::shuttingDown 1
 

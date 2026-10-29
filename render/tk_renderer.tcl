@@ -8,6 +8,7 @@ oo::class create ::laterm::TkRenderer {
     variable styleCache styleCount fontCache
     variable renderedRows renderedCols
     variable cursorOverlay
+    variable profile
 
     constructor {textWidget screenObject} {
         set widget $textWidget
@@ -18,6 +19,14 @@ oo::class create ::laterm::TkRenderer {
         set renderedRows -1
         set renderedCols -1
         set cursorOverlay ""
+        set profile [dict create \
+                    fullRedraws 0 \
+                    dirtyRenders 0 \
+                    styledRows 0 \
+                    styleRuns 0 \
+                    buildUs 0 \
+                    tkUs 0 \
+                    maxRowUs 0]
 
         $widget configure \
             -wrap none \
@@ -91,7 +100,9 @@ oo::class create ::laterm::TkRenderer {
     # Full-screen redraw.
     
 method render {} {
+
     lassign [$screen dimensions] rows cols
+    dict incr profile fullRedraws
 
     # Rebuild the required number of Text lines.
     set lines [lrepeat $rows ""]
@@ -126,6 +137,7 @@ method render {} {
 
 method renderDirty {} {
     lassign [$screen dimensions] rows cols
+    dict incr profile dirtyRenders
 
     # Resizing requires a full redraw.
     if {$rows != $renderedRows || $cols != $renderedCols} {
@@ -276,12 +288,13 @@ method styleTag {attributes} {
     return $tag
 }
 
+
+
 method renderStyledRow {row} {
     lassign [$screen dimensions] rows cols
 
     set line [expr {$row + 1}]
-
-    $widget delete "$line.0" "$line.end"
+    set rowStart [clock microseconds]
 
     set output ""
     set previousStyle ""
@@ -289,6 +302,7 @@ method renderStyledRow {row} {
     set textOffset 0
     set runs {}
 
+    # Build the row and its style runs.
     for {set col 0} {$col < $cols} {incr col} {
         set cell [$screen cell $row $col]
 
@@ -299,8 +313,12 @@ method renderStyledRow {row} {
         set style [my styleTag $cell]
         set char [dict get $cell text]
 
-        if {$previousStyle ne "" && $style ne $previousStyle} {
-            lappend runs [list $runStart $textOffset $previousStyle]
+        if {$previousStyle ne "" &&
+            $style ne $previousStyle} {
+
+            lappend runs [list \
+                $runStart $textOffset $previousStyle]
+
             set runStart $textOffset
         }
 
@@ -310,9 +328,14 @@ method renderStyledRow {row} {
     }
 
     if {$previousStyle ne ""} {
-        lappend runs [list $runStart $textOffset $previousStyle]
+        lappend runs [list \
+            $runStart $textOffset $previousStyle]
     }
 
+    set buildEnd [clock microseconds]
+
+    # Update the Tk Text widget.
+    $widget delete "$line.0" "$line.end"
     $widget insert "$line.0" $output
 
     foreach run $runs {
@@ -320,6 +343,20 @@ method renderStyledRow {row} {
 
         $widget tag add $tag \
             "$line.$start" "$line.$end"
+    }
+
+    set rowEnd [clock microseconds]
+
+    # Record profiling data.
+    dict incr profile styledRows
+    dict incr profile styleRuns [llength $runs]
+    dict incr profile buildUs [expr {$buildEnd - $rowStart}]
+    dict incr profile tkUs [expr {$rowEnd - $buildEnd}]
+
+    set rowUs [expr {$rowEnd - $rowStart}]
+
+    if {$rowUs > [dict get $profile maxRowUs]} {
+        dict set profile maxRowUs $rowUs
     }
 }
 
@@ -336,6 +373,22 @@ method cursorIndex {} {
 
     return "[expr {$row + 1}].$index"
 }
+
+method statistics {} {
+    return $profile
+}
+
+method resetStatistics {} {
+    set profile [dict create \
+        fullRedraws 0 \
+        dirtyRenders 0 \
+        styledRows 0 \
+        styleRuns 0 \
+        buildUs 0 \
+        tkUs 0 \
+        maxRowUs 0]
+}
+
 
 destructor {
     dict for {key fontName} $fontCache {
