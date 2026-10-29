@@ -41,6 +41,7 @@ set focusController [::LATerm::FocusController new \
     $screen [list $writer send  ]]
 
 
+
 set mouseController [::LATerm::MouseController new \
     .terminal $screen $mouseEncoder $writer]
 
@@ -58,6 +59,163 @@ set ::ptyClosed 0
 set ::shutdownAttempts 0
 set ::childMonitorTimer ""
 set ::shutdownTimer ""
+
+
+
+
+# LATerm 8.16.3 - Cooperative PTY scheduling
+
+set ::ptyResumeTimer ""
+set ::ptyReadBudget 1024
+
+proc resumePtyReading {} {
+    set ::ptyResumeTimer ""
+
+    if {$::shuttingDown || $::ptyClosed} {
+        return
+    }
+
+    fileevent $::pty_chan readable readpty
+}
+
+proc schedulePtyResume {} {
+    if {$::shuttingDown || $::ptyClosed} {
+        return
+    }
+
+    if {$::ptyResumeTimer ne ""} {
+        return
+    }
+
+    # Resume on a later event-loop iteration.
+    set ::ptyResumeTimer [after 1 resumePtyReading]
+}
+
+
+
+# LATerm 8.16.2 - Coalesced rendering
+set ::renderTimer ""
+set ::renderInterval 16
+set ::renderScheduled 0
+set ::renderExecuted 0
+
+
+set ::heartbeatTimer ""
+set ::heartbeatLast [clock milliseconds]
+set ::heartbeatMaxDelay 0
+
+set ::heartbeatLast [clock milliseconds]
+set ::heartbeatTimer [after 100 pipelineHeartbeat]
+
+proc pipelineHeartbeat {} {
+    if {$::shuttingDown} {
+        return
+    }
+
+    set now [clock milliseconds]
+    set elapsed [expr {$now - $::heartbeatLast}]
+
+    # Expected interval is 100 ms.
+    set delay [expr {max(0, $elapsed - 100)}]
+
+    if {$delay > $::heartbeatMaxDelay} {
+        set ::heartbeatMaxDelay $delay
+    }
+
+    set ::heartbeatLast $now
+    set ::heartbeatTimer [after 100 pipelineHeartbeat]
+}
+
+
+proc scheduleTerminalRender {} {
+    if {$::shuttingDown || $::ptyClosed} {
+        return
+    }
+
+    # A redraw is already pending.
+    if {$::renderTimer ne ""} {
+        return
+    }
+
+    incr ::renderScheduled
+
+    set ::renderTimer [after \
+        $::renderInterval \
+        flushTerminalRender]
+}
+
+proc flushTerminalRender {} {
+    set ::renderTimer ""
+
+    if {$::shuttingDown || $::ptyClosed} {
+        return
+    }
+
+    set start [clock microseconds]
+
+    $::renderer renderDirty
+
+    set renderUs [expr {
+        [clock microseconds] - $start
+    }]
+
+    incr ::renderExecuted
+
+    dict incr ::pipelineStats renderUs $renderUs
+
+    if {$renderUs >
+        [dict get $::pipelineStats maxRenderUs]} {
+
+        dict set ::pipelineStats maxRenderUs $renderUs
+    }
+}
+
+# LATerm 8.16.1 - Pipeline instrumentation
+set ::pipelineStats [dict create \
+    reads 0 \
+    bytes 0 \
+    parseUs 0 \
+    renderUs 0 \
+    maxParseUs 0 \
+    maxRenderUs 0]
+
+proc reportPipelineStats {} {
+    set s $::pipelineStats
+
+    set reads [dict get $s reads]
+    set bytes [dict get $s bytes]
+    set parseUs [dict get $s parseUs]
+    set renderUs [dict get $s renderUs]
+
+    puts stderr "\nLATerm pipeline statistics"
+    puts stderr "---------------------------"
+    puts stderr "PTY reads: $reads"
+    puts stderr "Bytes processed: $bytes"
+
+    set renders $::renderExecuted
+
+    puts stderr "Render requests: $::renderScheduled"
+    puts stderr "Render executions: $renders"
+
+    if {$renders > 0} {
+        puts stderr [format "Avg render/execution: %.3f ms" \
+            [expr {$renderUs / 1000.0 / $renders}]]
+    }
+
+    puts stderr [format "Total parse time: %.3f s" \
+        [expr {$parseUs / 1000000.0}]]
+
+    puts stderr [format "Total render time: %.3f s" \
+        [expr {$renderUs / 1000000.0}]]
+
+    puts stderr [format "Max parse time: %.3f ms" \
+        [expr {[dict get $s maxParseUs] / 1000.0}]]
+
+    puts stderr [format "Max render time: %.3f ms" \
+        [expr {[dict get $s maxRenderUs] / 1000.0}]]
+
+    puts stderr "Max event-loop delay: $::heartbeatMaxDelay ms"
+}
 
 proc cancelLifecycleTimer {variableName} {
     upvar #0 $variableName timerId
@@ -118,14 +276,21 @@ proc terminalExited {} {
     if {$::shuttingDown} {
         return
     }
+    cancelLifecycleTimer ::ptyResumeTimer
+
+    reportPipelineStats
 
     set ::shuttingDown 1
 
      # Stop periodic child monitoring.
     cancelLifecycleTimer ::childMonitorTimer
 
+    cancelLifecycleTimer ::renderTimer
+
     # Disable further keyboard input.
     bind .terminal <KeyPress> {}
+
+    cancelLifecycleTimer ::heartbeatTimer
 
     closePty
 
@@ -199,12 +364,20 @@ proc checkChild {} {
     set ::childMonitorTimer [after 200 checkChild]
 }
 
+
 proc readpty {} {
     if {$::shuttingDown || $::ptyClosed} {
         return
     }
 
-    if {[catch {read $::pty_chan 4096} data options]} {
+    # Prevent another readable callback from being
+    # dispatched until this processing turn finishes.
+    fileevent $::pty_chan readable {}
+
+    if {[catch {
+        read $::pty_chan $::ptyReadBudget
+    } data options]} {
+
         if {[dict exists $options -errorcode] &&
             [lindex [dict get $options -errorcode] 0] eq "POSIX" &&
             [lindex [dict get $options -errorcode] 1] eq "EIO"} {
@@ -221,13 +394,47 @@ proc readpty {} {
     if {$data eq ""} {
         if {[eof $::pty_chan]} {
             terminalExited
+            return
         }
+
+        schedulePtyResume
         return
     }
 
-    $::parser feed $data 
-    $::renderer renderDirty
+    set start [clock microseconds]
+
+    if {[catch {
+        $::parser feed $data
+    } result options]} {
+        puts stderr "Parser error: $result"
+        puts stderr [dict get $options -errorinfo]
+        terminalExited
+        return
+    }
+
+    set parseUs [expr {
+        [clock microseconds] - $start
+    }]
+
+    dict incr ::pipelineStats reads
+    dict incr ::pipelineStats bytes [string length $data]
+    dict incr ::pipelineStats parseUs $parseUs
+
+    if {$parseUs > [dict get $::pipelineStats maxParseUs]} {
+        dict set ::pipelineStats maxParseUs $parseUs
+    }
+
+    # Schedule the next screen update.
+    scheduleTerminalRender
+
+    # Allow Tk to process other events before
+    # reading more PTY output.
+    schedulePtyResume
 }
+
+
+
+
 
 fconfigure $pty_chan -translation binary -blocking no -buffering none -encoding binary
 fileevent $pty_chan readable readpty

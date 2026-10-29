@@ -99,10 +99,13 @@ method render {} {
     $widget configure -state normal
     $widget delete 1.0 end
     $widget insert 1.0 [join $lines "\n"]
-    $widget configure -state disabled
-
-    for {set row 0} {$row < $rows} {incr row} {
-        my renderStyledRow $row
+    
+    try {
+        for {set row 0} {$row < $rows} {incr row} {
+            my renderStyledRow $row
+        }
+    } finally {
+        $widget configure -state disabled
     }
 
     set renderedRows $rows
@@ -132,17 +135,29 @@ method renderDirty {} {
 
     set changes [$screen consumeDirty]
     set dirtyRows [dict get $changes rows]
+    set dirtyCount [dict size $dirtyRows]
+    set cursorChanged [dict get $changes cursor]
 
-    foreach row [lsort -integer [dict keys $dirtyRows]] {
-        my renderStyledRow $row
+    if {$dirtyCount == 0 && !$cursorChanged} {
+        return
     }
 
-    if {[dict get $changes cursor] ||
-        [dict size $dirtyRows] > 0} {
+    if {$dirtyCount > 0} {
+        $widget configure -state normal
+
+        try {
+            foreach row [lsort -integer [dict keys $dirtyRows]] {
+                my renderStyledRow $row
+            }
+        } finally {
+            $widget configure -state disabled
+        }
+    }
+
+    if {$cursorChanged || $dirtyCount > 0} {
         my updateCursor
     }
 
-    # Update the overlay after text and cursor positioning.
     if {$cursorOverlay ne ""} {
         $cursorOverlay updatePosition
     }
@@ -152,6 +167,7 @@ method renderDirty {} {
     if {$cursorOverlay eq ""} {
         $widget tag raise latermCursor
     }
+
 }
 
 
@@ -265,7 +281,6 @@ method renderStyledRow {row} {
 
     set line [expr {$row + 1}]
 
-    $widget configure -state normal
     $widget delete "$line.0" "$line.end"
 
     set output ""
@@ -306,8 +321,6 @@ method renderStyledRow {row} {
         $widget tag add $tag \
             "$line.$start" "$line.$end"
     }
-
-    $widget configure -state disabled
 }
 
 method cursorIndex {} {
