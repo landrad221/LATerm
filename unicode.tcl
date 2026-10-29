@@ -107,27 +107,37 @@ namespace eval ::laterm::unicode {
         0x20000 0x3FFFD
     }
 
+
     proc charWidth {char} {
         variable combiningRanges
         variable wideRanges
 
         set cp [codepoint $char]
 
-        # C0/C1 controls are not printable.
+        # Fast path for printable ASCII.
+        # All characters U+0020 through U+007E
+        # occupy exactly one terminal cell.
+        if {$cp >= 0x20 && $cp <= 0x7E} {
+            return 1
+        }
+
+        # C0 and C1 control characters.
         if {$cp < 0x20 ||
             ($cp >= 0x7F && $cp < 0xA0)} {
             return 0
         }
 
+        # Combining characters occupy no extra cells.
         if {[inRanges $cp $combiningRanges]} {
             return 0
         }
 
+        # East Asian wide characters and emoji.
         if {[inRanges $cp $wideRanges]} {
             return 2
         }
 
         return 1
-    }
+}
 }
 
