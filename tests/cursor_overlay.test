@@ -37,17 +37,17 @@ proc ::overlay814::create {} {
 
     pack $window.terminal -fill both -expand 1
 
-    set screen [::laterm::Screen new 8 20]
+    set screen [::LATerm::Screen new 8 20]
 
     set adapter [::LATerm::ScreenAdapter new $screen]
 
     set parser [::LATerm::Parser new \
         [list $adapter event]]
 
-    set renderer [::laterm::TkRenderer new \
+    set renderer [::LATerm::TkRenderer new \
         $window.terminal $screen]
 
-    set overlay [::laterm::CursorOverlay new \
+    set overlay [::LATerm::CursorOverlay new \
         $window.cursor $window.terminal \
         $renderer $screen]
 

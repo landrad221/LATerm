@@ -28,17 +28,17 @@ puts "--------------------------------------------------"
 
 ::printProfile::measure "Unicode width" $iterations {
     for {set i 0} {$i < $iterations} {incr i} {
-        ::laterm::unicode::charWidth $sample
+        ::LATerm::unicode::charWidth $sample
     }
 }
 
 ::printProfile::measure "Unicode codepoint" $iterations {
     for {set i 0} {$i < $iterations} {incr i} {
-        ::laterm::unicode::codepoint $sample
+        ::LATerm::unicode::codepoint $sample
     }
 }
 
-set screen [::laterm::Screen new 24 80 0]
+set screen [::LATerm::Screen new 24 80 0]
 
 ::printProfile::measure "Single-char print" $iterations {
     for {set i 0} {$i < $iterations} {incr i} {
@@ -48,7 +48,7 @@ set screen [::laterm::Screen new 24 80 0]
 
 $screen destroy
 
-set screen [::laterm::Screen new 24 80 0]
+set screen [::LATerm::Screen new 24 80 0]
 set chunk [string repeat "A" 80]
 set chunks 625
 

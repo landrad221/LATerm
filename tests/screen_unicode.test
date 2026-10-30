@@ -6,7 +6,7 @@ source [file join \
     [file dirname [info script]] .. "render/screen.tcl"]
 
 test screen-unicode-001 {wide character occupies two cells} -body {
-    set s [::laterm::Screen new 2 6]
+    set s [::LATerm::Screen new 2 6]
     $s print "A中B"
 
     set result [list \
@@ -20,7 +20,7 @@ test screen-unicode-001 {wide character occupies two cells} -body {
 } -result [list 2 0 {0 4} "A中·B  \n      "]
 
 test screen-unicode-002 {combining mark} -body {
-    set s [::laterm::Screen new 1 5]
+    set s [::LATerm::Screen new 1 5]
     $s print "e\u0301"
 
     set result [list \
@@ -32,7 +32,7 @@ test screen-unicode-002 {combining mark} -body {
 } -result [list "e\u0301" {0 1}]
 
 test screen-unicode-003 {wide character wraps} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s print "ABC中"
 
     set result [list [$s dumpCells] [$s cursor]]
@@ -41,7 +41,7 @@ test screen-unicode-003 {wide character wraps} -body {
 } -result [list "ABC \n中·  " {1 2}]
 
 test screen-unicode-004 {overwrite wide leading cell} -body {
-    set s [::laterm::Screen new 1 5]
+    set s [::LATerm::Screen new 1 5]
     $s print "中AB"
     $s moveCursor 0 0
     $s print X
@@ -52,7 +52,7 @@ test screen-unicode-004 {overwrite wide leading cell} -body {
 } -result "X AB "
 
 test screen-unicode-005 {overwrite continuation cell} -body {
-    set s [::laterm::Screen new 1 5]
+    set s [::LATerm::Screen new 1 5]
     $s print "中AB"
     $s moveCursor 0 1
     $s print X
@@ -63,7 +63,7 @@ test screen-unicode-005 {overwrite continuation cell} -body {
 } -result " XAB "
 
 test screen-unicode-006 {wide character at right edge} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s print "AB中"
 
     set result [list \
@@ -75,7 +75,7 @@ test screen-unicode-006 {wide character at right edge} -body {
 } -result [list {0 3} 1]
 
 test screen-unicode-007 {combining mark after wide glyph} -body {
-    set s [::laterm::Screen new 1 4]
+    set s [::LATerm::Screen new 1 4]
     $s print "中\u0301"
 
     set result [list \
@@ -87,7 +87,7 @@ test screen-unicode-007 {combining mark after wide glyph} -body {
 } -result [list "中\u0301" {0 2}]
 
 test screen-unicode-008 {wide glyph dirty range} -body {
-    set s [::laterm::Screen new 2 6]
+    set s [::LATerm::Screen new 2 6]
     $s consumeDirty
     $s print 中
 
@@ -98,7 +98,7 @@ test screen-unicode-008 {wide glyph dirty range} -body {
 } -result {0 {{0 1}}}
 
 test screen-unicode-009 {ASCII remains compatible} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s print "ABCD"
     $s print "E"
 

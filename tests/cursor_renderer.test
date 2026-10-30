@@ -12,8 +12,8 @@ source [file join $root render/tk_renderer.tcl]
 test cursor-renderer-001 {cursor tag at initial position} -body {
     text .cursorTest
 
-    set s [::laterm::Screen new 2 10]
-    set r [::laterm::TkRenderer new .cursorTest $s]
+    set s [::LATerm::Screen new 2 10]
+    set r [::LATerm::TkRenderer new .cursorTest $s]
 
     set ranges [.cursorTest tag ranges latermCursor]
 
@@ -27,8 +27,8 @@ test cursor-renderer-001 {cursor tag at initial position} -body {
 test cursor-renderer-002 {cursor moves to new position} -body {
     text .cursorTest
 
-    set s [::laterm::Screen new 2 10]
-    set r [::laterm::TkRenderer new .cursorTest $s]
+    set s [::LATerm::Screen new 2 10]
+    set r [::LATerm::TkRenderer new .cursorTest $s]
 
     $s moveCursor 1 4
     $r renderDirty
@@ -45,8 +45,8 @@ test cursor-renderer-002 {cursor moves to new position} -body {
 test cursor-renderer-003 {hidden cursor has no tag range} -body {
     text .cursorTest
 
-    set s [::laterm::Screen new 2 10]
-    set r [::laterm::TkRenderer new .cursorTest $s]
+    set s [::LATerm::Screen new 2 10]
+    set r [::LATerm::TkRenderer new .cursorTest $s]
 
     $s setCursorVisible 0
     $r renderDirty

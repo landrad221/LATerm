@@ -23,7 +23,7 @@ proc ::terminalCompatibilityModes::pipeline {} {
     variable responses
     set responses {}
 
-    set screen [::laterm::Screen new 10 20]
+    set screen [::LATerm::Screen new 10 20]
 
     set adapter [::LATerm::ScreenAdapter new \
         $screen ::terminalCompatibilityModes::capture]

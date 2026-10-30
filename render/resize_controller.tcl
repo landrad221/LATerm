@@ -1,7 +1,7 @@
 
-namespace eval ::laterm {}
+namespace eval ::LATerm {}
 
-oo::class create ::laterm::ResizeController {
+oo::class create ::LATerm::ResizeController {
     variable widget screen ptyChannel
     variable cellWidth cellHeight
     variable lastRows lastCols

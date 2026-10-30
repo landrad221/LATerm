@@ -6,14 +6,14 @@ source [file join \
     [file dirname [info script]] .. "render/screen.tcl"]
 
 test screen-alternate-buffer-001 {initial screen is primary} -body {
-    set s [::laterm::Screen new 2 5]
+    set s [::LATerm::Screen new 2 5]
     set result [$s activeScreen]
     $s destroy
     set result
 } -result primary
 
 test screen-alternate-buffer-002 {alternate screen starts blank} -body {
-    set s [::laterm::Screen new 2 5]
+    set s [::LATerm::Screen new 2 5]
     $s print "HELLO"
     $s enterAlternate
 
@@ -23,7 +23,7 @@ test screen-alternate-buffer-002 {alternate screen starts blank} -body {
 } -result [list alternate "     \n     "]
 
 test screen-alternate-buffer-003 {primary content restored} -body {
-    set s [::laterm::Screen new 2 5]
+    set s [::LATerm::Screen new 2 5]
     $s print "HELLO"
     $s enterAlternate
     $s print "WORLD"
@@ -35,7 +35,7 @@ test screen-alternate-buffer-003 {primary content restored} -body {
 } -result "HELLO\n     "
 
 test screen-alternate-buffer-004 {cursor restored} -body {
-    set s [::laterm::Screen new 3 10]
+    set s [::LATerm::Screen new 3 10]
     $s moveCursor 2 7
     $s enterAlternate
     $s moveCursor 1 3
@@ -47,7 +47,7 @@ test screen-alternate-buffer-004 {cursor restored} -body {
 } -result {2 7}
 
 test screen-alternate-buffer-005 {alternate buffer persists} -body {
-    set s [::laterm::Screen new 2 8]
+    set s [::LATerm::Screen new 2 8]
     $s enterAlternate
     $s print "EDITOR"
     $s leaveAlternate
@@ -59,7 +59,7 @@ test screen-alternate-buffer-005 {alternate buffer persists} -body {
 } -result "EDITOR  \n        "
 
 test screen-alternate-buffer-006 {switch marks full screen dirty} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s consumeDirty
     $s enterAlternate
 
@@ -69,7 +69,7 @@ test screen-alternate-buffer-006 {switch marks full screen dirty} -body {
 } -result {0 {{0 3}} 1 {{0 3}}}
 
 test screen-alternate-buffer-007 {repeated switching is harmless} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s enterAlternate
     $s enterAlternate
     $s leaveAlternate

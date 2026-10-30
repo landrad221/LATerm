@@ -6,7 +6,7 @@ source [file join \
     [file dirname [info script]] .. "render/screen.tcl"]
 
 test screen-scrollback-001 {initial history is empty} -body {
-    set s [::laterm::Screen new 2 4 10]
+    set s [::LATerm::Screen new 2 4 10]
 
     set result [list \
         [$s scrollbackSize] \
@@ -17,7 +17,7 @@ test screen-scrollback-001 {initial history is empty} -body {
 } -result {0 10}
 
 test screen-scrollback-002 {full-screen scroll captures row} -body {
-    set s [::laterm::Screen new 2 3 10]
+    set s [::LATerm::Screen new 2 3 10]
 
     $s print "AAABBB"
     $s scrollUp
@@ -31,7 +31,7 @@ test screen-scrollback-002 {full-screen scroll captures row} -body {
 } -result [list "AAA" "BBB\n   "]
 
 test screen-scrollback-003 {history respects limit} -body {
-    set s [::laterm::Screen new 2 3 2]
+    set s [::LATerm::Screen new 2 3 2]
 
     $s print "AAABBB"
     $s scrollUp
@@ -47,7 +47,7 @@ test screen-scrollback-003 {history respects limit} -body {
 } -result [list 2 "BBB\n   "]
 
 test screen-scrollback-004 {alternate screen does not add history} -body {
-    set s [::laterm::Screen new 2 3 10]
+    set s [::LATerm::Screen new 2 3 10]
 
     $s enterAlternate
     $s print "AAABBB"
@@ -61,7 +61,7 @@ test screen-scrollback-004 {alternate screen does not add history} -body {
 } -result 0
 
 test screen-scrollback-005 {restricted region does not add history} -body {
-    set s [::laterm::Screen new 4 3 10]
+    set s [::LATerm::Screen new 4 3 10]
 
     $s print "AAABBBCCCDDD"
     $s setScrollRegion 1 2
@@ -76,7 +76,7 @@ test screen-scrollback-005 {restricted region does not add history} -body {
 } -result [list 0 "AAA\nCCC\n   \nDDD"]
 
 test screen-scrollback-006 {history retains Unicode cells} -body {
-    set s [::laterm::Screen new 2 4 10]
+    set s [::LATerm::Screen new 2 4 10]
 
     $s print "中AB"
     $s scrollUp
@@ -93,7 +93,7 @@ test screen-scrollback-006 {history retains Unicode cells} -body {
 } -result [list 中 2 0]
 
 test screen-scrollback-007 {clear history} -body {
-    set s [::laterm::Screen new 2 3 10]
+    set s [::LATerm::Screen new 2 3 10]
 
     $s print "AAABBB"
     $s scrollUp
@@ -106,7 +106,7 @@ test screen-scrollback-007 {clear history} -body {
 } -result 0
 
 test screen-scrollback-008 {limit zero disables history} -body {
-    set s [::laterm::Screen new 2 3 0]
+    set s [::LATerm::Screen new 2 3 0]
 
     $s print "AAABBB"
     $s scrollUp
@@ -118,7 +118,7 @@ test screen-scrollback-008 {limit zero disables history} -body {
 } -result 0
 
 test screen-scrollback-009 {reducing limit trims oldest rows} -body {
-    set s [::laterm::Screen new 3 3 10]
+    set s [::LATerm::Screen new 3 3 10]
 
     $s print "AAABBBCCC"
     $s scrollUp 2
@@ -133,7 +133,7 @@ test screen-scrollback-009 {reducing limit trims oldest rows} -body {
 } -result [list 1 "BBB"]
 
 test screen-scrollback-010 {scroll down does not add history} -body {
-    set s [::laterm::Screen new 2 3 10]
+    set s [::LATerm::Screen new 2 3 10]
 
     $s print "AAABBB"
     $s scrollDown

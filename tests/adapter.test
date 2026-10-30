@@ -9,7 +9,7 @@ source [file join $root parser.tcl]
 source [file join $root "render/screen_adapter.tcl"]
 
 proc createPipeline {rows cols} {
-    set screen [::laterm::Screen new $rows $cols]
+    set screen [::LATerm::Screen new $rows $cols]
     set adapter [::LATerm::ScreenAdapter new $screen]
     set parser [::LATerm::Parser new [list $adapter event]]
 

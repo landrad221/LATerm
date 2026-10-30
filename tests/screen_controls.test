@@ -6,7 +6,7 @@ source [file join \
     [file dirname [info script]] .. "render/screen.tcl"]
 
 test screen-controls-001 {carriage return} -body {
-    set s [::laterm::Screen new 2 5]
+    set s [::LATerm::Screen new 2 5]
     $s print "ABC"
     $s cr
     $s print "X"
@@ -16,7 +16,7 @@ test screen-controls-001 {carriage return} -body {
 } -result "XBC  \n     "
 
 test screen-controls-002 {line feed preserves column} -body {
-    set s [::laterm::Screen new 3 5]
+    set s [::LATerm::Screen new 3 5]
     $s print "AB"
     $s lf
     $s print "X"
@@ -26,7 +26,7 @@ test screen-controls-002 {line feed preserves column} -body {
 } -result [list {1 3} "AB   \n  X  \n     "]
 
 test screen-controls-003 {backspace} -body {
-    set s [::laterm::Screen new 1 5]
+    set s [::LATerm::Screen new 1 5]
     $s print "ABC"
     $s bs
     $s print "X"
@@ -36,7 +36,7 @@ test screen-controls-003 {backspace} -body {
 } -result "ABX  "
 
 test screen-controls-004 {horizontal tab} -body {
-    set s [::laterm::Screen new 1 20]
+    set s [::LATerm::Screen new 1 20]
     $s print "A"
     $s tab
     set result [$s cursor]
@@ -45,7 +45,7 @@ test screen-controls-004 {horizontal tab} -body {
 } -result {0 8}
 
 test screen-controls-005 {scroll up} -body {
-    set s [::laterm::Screen new 3 3]
+    set s [::LATerm::Screen new 3 3]
     $s print "AAABBBCCC"
     $s scrollUp
     set result [$s dump]
@@ -54,7 +54,7 @@ test screen-controls-005 {scroll up} -body {
 } -result "BBB\nCCC\n   "
 
 test screen-controls-006 {scroll region} -body {
-    set s [::laterm::Screen new 5 3]
+    set s [::LATerm::Screen new 5 3]
     $s print "AAABBBCCCDDDEEE"
     $s setScrollRegion 1 3
     $s scrollUp
@@ -64,7 +64,7 @@ test screen-controls-006 {scroll region} -body {
 } -result "AAA\nCCC\nDDD\n   \nEEE"
 
 test screen-controls-007 {bottom delayed wrap scrolls} -body {
-    set s [::laterm::Screen new 2 3]
+    set s [::LATerm::Screen new 2 3]
     $s print "ABCDEF"
     $s print "G"
     set result [list [$s dump] [$s cursor]]
@@ -73,7 +73,7 @@ test screen-controls-007 {bottom delayed wrap scrolls} -body {
 } -result [list "DEF\nG  " {1 1}]
 
 test screen-controls-008 {reverse index scrolls down} -body {
-    set s [::laterm::Screen new 3 2]
+    set s [::LATerm::Screen new 3 2]
     $s print "AABBCC"
     $s moveCursor 0 0
     $s reverseIndex

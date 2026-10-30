@@ -1,5 +1,5 @@
 
-namespace eval ::laterm::unicode {
+namespace eval ::LATerm::unicode {
     namespace export charWidth codepoint
 
     proc codepoint {char} {

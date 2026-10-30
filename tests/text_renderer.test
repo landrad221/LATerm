@@ -12,8 +12,8 @@ source [file join \
 
 test text-renderer-001 {initial render} -body {
     text .test1
-    set s [::laterm::Screen new 2 5]
-    set r [::laterm::TkRenderer new .test1 $s]
+    set s [::LATerm::Screen new 2 5]
+    set r [::LATerm::TkRenderer new .test1 $s]
 
     $s print "HELLO"
     $r renderDirty
@@ -29,8 +29,8 @@ test text-renderer-001 {initial render} -body {
 
 test text-renderer-002 {dirty row update} -body {
     text .test2
-    set s [::laterm::Screen new 2 5]
-    set r [::laterm::TkRenderer new .test2 $s]
+    set s [::LATerm::Screen new 2 5]
+    set r [::LATerm::TkRenderer new .test2 $s]
 
     $s moveCursor 1 0
     $s print "WORLD"
@@ -47,8 +47,8 @@ test text-renderer-002 {dirty row update} -body {
 
 test text-renderer-003 {Unicode column mapping} -body {
     text .test3
-    set s [::laterm::Screen new 1 6]
-    set r [::laterm::TkRenderer new .test3 $s]
+    set s [::LATerm::Screen new 1 6]
+    set r [::LATerm::TkRenderer new .test3 $s]
 
     $s print "A中B"
 
@@ -63,8 +63,8 @@ test text-renderer-003 {Unicode column mapping} -body {
 
 test text-renderer-004 {dirty state consumed} -body {
     text .test4
-    set s [::laterm::Screen new 2 5]
-    set r [::laterm::TkRenderer new .test4 $s]
+    set s [::LATerm::Screen new 2 5]
+    set r [::LATerm::TkRenderer new .test4 $s]
 
     $s print "HELLO"
     $r renderDirty
@@ -81,8 +81,8 @@ test text-renderer-004 {dirty state consumed} -body {
 
 test text-renderer-005 {wide characters render correctly} -body {
     text .test5
-    set s [::laterm::Screen new 1 6]
-    set r [::laterm::TkRenderer new .test5 $s]
+    set s [::LATerm::Screen new 1 6]
+    set r [::LATerm::TkRenderer new .test5 $s]
 
     $s print "A中B"
     $r renderDirty

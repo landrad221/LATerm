@@ -44,7 +44,7 @@ proc ::screenStress::run {name script} {
 }
 
 proc ::screenStress::newScreen {rows cols {history 1000}} {
-    return [::laterm::Screen new $rows $cols $history]
+    return [::LATerm::Screen new $rows $cols $history]
 }
 
 puts "=========================================="

@@ -6,7 +6,7 @@ source [file join \
     [file dirname [info script]] .. "render/screen.tcl"]
 
 test screen-resize-001 {grow columns} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s print "AB"
     $s resize 2 6
 
@@ -16,7 +16,7 @@ test screen-resize-001 {grow columns} -body {
 } -result [list {2 6} "AB    \n      "]
 
 test screen-resize-002 {shrink columns} -body {
-    set s [::laterm::Screen new 2 6]
+    set s [::LATerm::Screen new 2 6]
     $s print "ABCDEF"
     $s resize 2 4
 
@@ -26,7 +26,7 @@ test screen-resize-002 {shrink columns} -body {
 } -result "ABCD\n    "
 
 test screen-resize-003 {grow rows} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s print "AB"
     $s resize 4 4
 
@@ -36,7 +36,7 @@ test screen-resize-003 {grow rows} -body {
 } -result [list {4 4} "AB  \n    \n    \n    "]
 
 test screen-resize-004 {shrink rows} -body {
-    set s [::laterm::Screen new 3 4]
+    set s [::LATerm::Screen new 3 4]
     $s print "AB"
     $s moveCursor 2 0
     $s print "CD"
@@ -48,7 +48,7 @@ test screen-resize-004 {shrink rows} -body {
 } -result "AB  \n    "
 
 test screen-resize-005 {cursor clamps to new dimensions} -body {
-    set s [::laterm::Screen new 5 10]
+    set s [::LATerm::Screen new 5 10]
     $s moveCursor 4 9
     $s resize 2 3
 
@@ -58,7 +58,7 @@ test screen-resize-005 {cursor clamps to new dimensions} -body {
 } -result {1 2}
 
 test screen-resize-006 {wide glyph truncated safely} -body {
-    set s [::laterm::Screen new 1 6]
+    set s [::LATerm::Screen new 1 6]
     $s print "ABC中"
     $s resize 1 4
 
@@ -68,7 +68,7 @@ test screen-resize-006 {wide glyph truncated safely} -body {
 } -result [list "ABC " 1]
 
 test screen-resize-007 {wide glyph preserved when it fits} -body {
-    set s [::laterm::Screen new 1 6]
+    set s [::LATerm::Screen new 1 6]
     $s print "AB中"
     $s resize 1 4
 
@@ -78,7 +78,7 @@ test screen-resize-007 {wide glyph preserved when it fits} -body {
 } -result [list "AB中·" 1]
 
 test screen-resize-008 {primary buffer resized while alternate active} -body {
-    set s [::laterm::Screen new 2 5]
+    set s [::LATerm::Screen new 2 5]
     $s print "SHELL"
     $s enterAlternate
     $s resize 3 7
@@ -90,7 +90,7 @@ test screen-resize-008 {primary buffer resized while alternate active} -body {
 } -result [list {3 7} "SHELL  \n       \n       "]
 
 test screen-resize-009 {alternate buffer resized while primary active} -body {
-    set s [::laterm::Screen new 2 5]
+    set s [::LATerm::Screen new 2 5]
     $s enterAlternate
     $s print "EDIT"
     $s leaveAlternate
@@ -103,7 +103,7 @@ test screen-resize-009 {alternate buffer resized while primary active} -body {
 } -result [list {3 7} "EDIT   \n       \n       "]
 
 test screen-resize-010 {resize marks entire screen dirty} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
     $s consumeDirty
     $s resize 3 5
 
@@ -113,7 +113,7 @@ test screen-resize-010 {resize marks entire screen dirty} -body {
 } -result {0 {{0 4}} 1 {{0 4}} 2 {{0 4}}}
 
 test screen-resize-011 {invalid dimensions rejected} -body {
-    set s [::laterm::Screen new 2 4]
+    set s [::LATerm::Screen new 2 4]
 
     set result [catch {$s resize 0 5}]
     $s destroy
@@ -121,7 +121,7 @@ test screen-resize-011 {invalid dimensions rejected} -body {
 } -result 1
 
 test screen-resize-012 {scrollback survives resize} -body {
-    set s [::laterm::Screen new 2 4 10]
+    set s [::LATerm::Screen new 2 4 10]
     $s print "ABCD"
     $s scrollUp
     $s resize 3 6

@@ -21,7 +21,7 @@ proc ::terminalResponses::pipeline {} {
     variable received
     set received {}
 
-    set s [::laterm::Screen new 5 20]
+    set s [::LATerm::Screen new 5 20]
     set a [::LATerm::ScreenAdapter new \
         $s ::terminalResponses::capture]
     set p [::LATerm::Parser new [list $a event]]
@@ -102,7 +102,7 @@ test terminal-responses-005 {queries do not alter screen contents} -body {
 } -result 1
 
 test terminal-responses-006 {optional response callback} -body {
-    set s [::laterm::Screen new 2 10]
+    set s [::LATerm::Screen new 2 10]
     set a [::LATerm::ScreenAdapter new $s]
     set p [::LATerm::Parser new [list $a event]]
 

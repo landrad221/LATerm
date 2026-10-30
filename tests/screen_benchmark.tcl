@@ -33,7 +33,7 @@ proc ::screenBenchmark::newScreen {} {
     variable rows
     variable cols
 
-    return [::laterm::Screen new $rows $cols 0]
+    return [::LATerm::Screen new $rows $cols 0]
 }
 
 puts "Screen Model Benchmark"

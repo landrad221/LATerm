@@ -40,8 +40,8 @@ text .terminal \
 
 pack .terminal -fill both -expand 1
 
-set screen [::laterm::Screen new 24 80 0]
-set renderer [::laterm::TkRenderer new .terminal $screen]
+set screen [::LATerm::Screen new 24 80 0]
+set renderer [::LATerm::TkRenderer new .terminal $screen]
 
 # Populate the entire screen.
 for {set row 0} {$row < 24} {incr row} {

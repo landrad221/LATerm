@@ -29,7 +29,7 @@ proc ::vtRegression::pipeline {} {
     variable replies
     set replies {}
 
-    set screen [::laterm::Screen new 5 20]
+    set screen [::LATerm::Screen new 5 20]
     set adapter [::LATerm::ScreenAdapter new \
         $screen ::vtRegression::captureReply]
     set parser [::LATerm::Parser new \

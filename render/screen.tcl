@@ -1,9 +1,9 @@
 
 
-namespace eval ::laterm {}
+namespace eval ::LATerm {}
 source [file join [file dirname [info script]] "../unicode.tcl"]
 
-oo::class create ::laterm::Screen {
+oo::class create ::LATerm::Screen {
     variable rows cols grid
     variable cursorRow cursorCol wrapPending attrs
     variable scrollTop scrollBottom tabStops
@@ -1070,11 +1070,11 @@ oo::class create ::laterm::Screen {
 
     method print {text} {
         foreach ch [split $text ""] {
-            set width [::laterm::unicode::charWidth $ch]
+            set width [::LATerm::unicode::charWidth $ch]
 
             # The parser must handle C0/C1 controls.
             # They must not become combining marks.
-            set cp [::laterm::unicode::codepoint $ch]
+            set cp [::LATerm::unicode::codepoint $ch]
 
             if {$cp < 0x20 || ($cp >= 0x7F && $cp < 0xA0)} {
                 error "control character passed to Screen.print"

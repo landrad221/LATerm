@@ -1,9 +1,9 @@
 
 package require Tk
 
-namespace eval ::laterm {}
+namespace eval ::LATerm {}
 
-oo::class create ::laterm::TkRenderer {
+oo::class create ::LATerm::TkRenderer {
     variable widget screen
     variable styleCache styleCount fontCache
     variable renderedRows renderedCols

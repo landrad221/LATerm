@@ -1,18 +1,6 @@
 
 namespace eval ::LATerm {}
 
-proc ::LATerm::onPtyWriteFailure {message} {
-    puts stderr "LATerm: PTY write failure: $message"
-
-    if {$::shuttingDown} {
-        return
-    }
-
-    # Schedule shutdown rather than entering it
-    # recursively from a writer callback.
-    after idle terminalExited
-}
-
 oo::class create ::LATerm::PtyWriter {
     variable channel queue scheduled closed
     variable maxPending idleCallback

@@ -8,7 +8,7 @@ source [file join $root render/screen.tcl]
 source [file join $root keyboard_encoder.tcl]
 
 proc keyboardPipeline {} {
-    set s [::laterm::Screen new 5 20]
+    set s [::LATerm::Screen new 5 20]
     set k [::LATerm::KeyboardEncoder new $s]
     return [list $s $k]
 }

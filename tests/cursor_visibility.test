@@ -9,7 +9,7 @@ source [file join $root "parser.tcl"]
 source [file join $root "render/screen_adapter.tcl"]
 
 proc cursorPipeline {} {
-    set s [::laterm::Screen new 3 10]
+    set s [::LATerm::Screen new 3 10]
     set a [::LATerm::ScreenAdapter new $s]
     set p [::LATerm::Parser new [list $a event]]
 

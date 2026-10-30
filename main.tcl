@@ -1,4 +1,3 @@
-# import libs 
 package require Tk
 
 lappend auto_path [file dirname [info script]]
@@ -17,549 +16,483 @@ source focus_controller.tcl
 source cursor_overlay.tcl
 source pty_writer.tcl
 
-set cursorCanvas [canvas .cursorOverlay]
+namespace eval ::LATerm {}
 
-text .terminal
+oo::class create ::LATerm::Application {
+    variable terminal cursorCanvas
+    variable ptyChannel ptyFile pid
+    variable writer screen adapter parser renderer keyboard clipboard
+    variable mouseEncoder mouseController focusController cursorOverlay
+    variable resizeController
+    variable shuttingDown childReaped ptyClosed shutdownAttempts
+    variable childMonitorTimer shutdownTimer ptyResumeTimer
+    variable ptyReadBudget renderTimer renderInterval
+    variable renderScheduled renderExecuted
+    variable heartbeatTimer heartbeatLast heartbeatMaxDelay
+    variable pipelineStats
 
-# setup vars
-#
-set pty_pair [pty::open]
-set pty_chan [lindex $pty_pair 0]
-set pty_file [lindex $pty_pair 1]
+    constructor {} {
+        set terminal .terminal
+        set cursorCanvas .cursorOverlay
 
-set writer [::LATerm::PtyWriter new $pty_chan \
-    1048576 ::LATerm::onPtyWriterFailure]
+        set pid ""
+        set shuttingDown 0
+        set childReaped 0
+        set ptyClosed 0
+        set shutdownAttempts 0
+        set childMonitorTimer ""
+        set shutdownTimer ""
+        set ptyResumeTimer ""
+        set ptyReadBudget 1024
+        set renderTimer ""
+        set renderInterval 16
+        set renderScheduled 0
+        set renderExecuted 0
+        set heartbeatTimer ""
+        set heartbeatLast [clock milliseconds]
+        set heartbeatMaxDelay 0
+        set pipelineStats [dict create \
+            reads 0 \
+            bytes 0 \
+            parseUs 0 \
+            renderUs 0 \
+            maxParseUs 0 \
+            maxRenderUs 0]
 
-set screen   [::laterm::Screen new 24 80]
-set adapter  [::LATerm::ScreenAdapter new $screen [list $writer send]]
-set parser   [::LATerm::Parser new [list $adapter event]]
-set renderer [::laterm::TkRenderer new .terminal $screen]
-set keyboard [::LATerm::KeyboardEncoder new $screen]
-set clipboard [::LATerm::ClipboardController new $screen $writer]
-set mouseEncoder [::LATerm::MouseEncoder new $screen]
-set focusController [::LATerm::FocusController new \
-    $screen [list $writer send  ]]
-
-
-
-set mouseController [::LATerm::MouseController new \
-    .terminal $screen $mouseEncoder $writer]
-
-set cursorOverlay [::laterm::CursorOverlay new \
-    .cursorOverlay .terminal $renderer $screen]
-
-$renderer setCursorOverlay $cursorOverlay
-$renderer updateCursor
-$cursorOverlay refresh
-
-# LATerm lifecycle state
-set ::shuttingDown 0
-set ::childReaped 0
-set ::ptyClosed 0
-set ::shutdownAttempts 0
-set ::childMonitorTimer ""
-set ::shutdownTimer ""
-
-
-
-
-# LATerm 8.16.3 - Cooperative PTY scheduling
-
-set ::ptyResumeTimer ""
-set ::ptyReadBudget 1024
-
-proc resumePtyReading {} {
-    set ::ptyResumeTimer ""
-
-    if {$::shuttingDown || $::ptyClosed} {
-        return
+        my initialize
     }
 
-    fileevent $::pty_chan readable readpty
-}
+    method initialize {} {
+        set cursorCanvas [canvas $cursorCanvas]
+        text $terminal
 
-proc schedulePtyResume {} {
-    if {$::shuttingDown || $::ptyClosed} {
-        return
+        lassign [pty::open] ptyChannel ptyFile
+        set writer [::LATerm::PtyWriter new \
+            $ptyChannel 1048576 [list [self] onPtyWriterFailure]]
+        set screen [::LATerm::Screen new 24 80]
+        set adapter [::LATerm::ScreenAdapter new \
+            $screen [list $writer send]]
+        set parser [::LATerm::Parser new [list $adapter event]]
+        set renderer [::LATerm::TkRenderer new $terminal $screen]
+        set keyboard [::LATerm::KeyboardEncoder new $screen]
+        set clipboard [::LATerm::ClipboardController new $screen $writer]
+        set mouseEncoder [::LATerm::MouseEncoder new $screen]
+        set focusController [::LATerm::FocusController new \
+            $screen [list $writer send]]
+        set mouseController [::LATerm::MouseController new \
+            $terminal $screen $mouseEncoder $writer]
+        set cursorOverlay [::LATerm::CursorOverlay new \
+            $cursorCanvas $terminal $renderer $screen]
+
+        $renderer setCursorOverlay $cursorOverlay
+        $renderer updateCursor
+        $cursorOverlay refresh
+
+        set heartbeatLast [clock milliseconds]
+        set heartbeatTimer [after 100 [list [self] pipelineHeartbeat]]
+
+        fconfigure $ptyChannel \
+            -translation binary \
+            -blocking no \
+            -buffering none \
+            -encoding binary
+        fileevent $ptyChannel readable [list [self] readPty]
+
+        set pid [pty::spawn $ptyChannel $ptyFile /bin/bash -i]
+        pty::resize $ptyChannel 40 120
+        set childMonitorTimer [after 200 [list [self] checkChild]]
+
+        wm title . 'LATerm'
+        wm protocol . WM_DELETE_WINDOW [list [self] shutdownTerminal]
+
+        set resizeController [::LATerm::ResizeController new \
+            $terminal $screen $ptyChannel]
+
+        $terminal configure \
+            -wrap none \
+            -selectbackground "#365a85" \
+            -selectforeground "#ffffff" \
+            -inactiveselectbackground "#365a85" \
+            -exportselection 1 \
+            -takefocus 1
+
+        pack $terminal -fill both -expand true
+        bind $terminal <KeyPress> \
+            [list [self] handleTerminalKey %W %K %A %s]
+        focus $terminal
+
+        set tags [bindtags $terminal]
+        if {"LATermMouse" ni $tags} {
+            bindtags $terminal [linsert $tags 0 LATermMouse]
+        }
+
+        my installBindings
     }
 
-    if {$::ptyResumeTimer ne ""} {
-        return
+    method installBindings {} {
+        bind LATermMouse <ButtonPress-1> \
+            [list [self] handleMouse press 1 %x %y %s]
+        bind LATermMouse <ButtonRelease-1> \
+            [list [self] handleMouse release 1 %x %y %s]
+        bind LATermMouse <ButtonPress-2> \
+            [list [self] handleMouse press 2 %x %y %s]
+        bind LATermMouse <ButtonRelease-2> \
+            [list [self] handleMouse release 2 %x %y %s]
+        bind LATermMouse <ButtonPress-3> \
+            [list [self] handleMouse press 3 %x %y %s]
+        bind LATermMouse <ButtonRelease-3> \
+            [list [self] handleMouse release 3 %x %y %s]
+        bind LATermMouse <Motion> \
+            [list [self] handleMouse motion 0 %x %y %s]
+        bind LATermMouse <ButtonPress-4> \
+            [list [self] handleMouse wheel wheel-up %x %y %s]
+        bind LATermMouse <ButtonPress-5> \
+            [list [self] handleMouse wheel wheel-down %x %y %s]
+
+        bind $terminal <FocusIn> [list $focusController send 1]
+        bind $terminal <FocusOut> [list $focusController send 0]
+        bind $terminal <Control-Shift-KeyPress-V> \
+            [list [self] handleClipboardPaste %W]
+        bind $terminal <Control-Shift-KeyPress-C> \
+            [list [self] handleClipboardCopy %W]
     }
 
-    # Resume on a later event-loop iteration.
-    set ::ptyResumeTimer [after 1 resumePtyReading]
-}
+    method resumePtyReading {} {
+        set ptyResumeTimer ""
 
-
-
-# LATerm 8.16.2 - Coalesced rendering
-set ::renderTimer ""
-set ::renderInterval 16
-set ::renderScheduled 0
-set ::renderExecuted 0
-
-
-set ::heartbeatTimer ""
-set ::heartbeatLast [clock milliseconds]
-set ::heartbeatMaxDelay 0
-
-set ::heartbeatLast [clock milliseconds]
-set ::heartbeatTimer [after 100 pipelineHeartbeat]
-
-proc pipelineHeartbeat {} {
-    if {$::shuttingDown} {
-        return
-    }
-
-    set now [clock milliseconds]
-    set elapsed [expr {$now - $::heartbeatLast}]
-
-    # Expected interval is 100 ms.
-    set delay [expr {max(0, $elapsed - 100)}]
-
-    if {$delay > $::heartbeatMaxDelay} {
-        set ::heartbeatMaxDelay $delay
-    }
-
-    set ::heartbeatLast $now
-    set ::heartbeatTimer [after 100 pipelineHeartbeat]
-}
-
-
-proc scheduleTerminalRender {} {
-    if {$::shuttingDown || $::ptyClosed} {
-        return
-    }
-
-    # A redraw is already pending.
-    if {$::renderTimer ne ""} {
-        return
-    }
-
-    incr ::renderScheduled
-
-    set ::renderTimer [after \
-        $::renderInterval \
-        flushTerminalRender]
-}
-
-proc flushTerminalRender {} {
-    set ::renderTimer ""
-
-    if {$::shuttingDown || $::ptyClosed} {
-        return
-    }
-
-    set start [clock microseconds]
-
-    $::renderer renderDirty
-
-    set renderUs [expr {
-        [clock microseconds] - $start
-    }]
-
-    incr ::renderExecuted
-
-    dict incr ::pipelineStats renderUs $renderUs
-
-    if {$renderUs >
-        [dict get $::pipelineStats maxRenderUs]} {
-
-        dict set ::pipelineStats maxRenderUs $renderUs
-    }
-}
-
-# LATerm 8.16.1 - Pipeline instrumentation
-set ::pipelineStats [dict create \
-    reads 0 \
-    bytes 0 \
-    parseUs 0 \
-    renderUs 0 \
-    maxParseUs 0 \
-    maxRenderUs 0]
-
-proc reportRendererStats {} {
-    set s [$::renderer statistics]
-
-    set rows [dict get $s styledRows]
-    set runs [dict get $s styleRuns]
-    set buildUs [dict get $s buildUs]
-    set tkUs [dict get $s tkUs]
-
-    puts stderr "\nLATerm renderer statistics"
-    puts stderr "---------------------------"
-    puts stderr "Full redraws: [dict get $s fullRedraws]"
-    puts stderr "Dirty render calls: [dict get $s dirtyRenders]"
-    puts stderr "Styled rows: $rows"
-    puts stderr "Style runs: $runs"
-
-    if {$rows > 0} {
-        puts stderr [format "Avg style runs/row: %.2f" \
-            [expr {double($runs) / $rows}]]
-
-        puts stderr [format "Avg row time: %.3f ms" \
-            [expr {($buildUs + $tkUs) / 1000.0 / $rows}]]
-    }
-
-    puts stderr [format "Row construction time: %.3f s" \
-        [expr {$buildUs / 1000000.0}]]
-
-    puts stderr [format "Tk command time: %.3f s" \
-        [expr {$tkUs / 1000000.0}]]
-
-    puts stderr [format "Maximum row time: %.3f ms" \
-        [expr {[dict get $s maxRowUs] / 1000.0}]]
-}
-
-
-proc reportPipelineStats {} {
-    set s $::pipelineStats
-
-    set reads [dict get $s reads]
-    set bytes [dict get $s bytes]
-    set parseUs [dict get $s parseUs]
-    set renderUs [dict get $s renderUs]
-
-    puts stderr "\nLATerm pipeline statistics"
-    puts stderr "---------------------------"
-    puts stderr "PTY reads: $reads"
-    puts stderr "Bytes processed: $bytes"
-
-    set renders $::renderExecuted
-
-    puts stderr "Render requests: $::renderScheduled"
-    puts stderr "Render executions: $renders"
-
-    if {$renders > 0} {
-        puts stderr [format "Avg render/execution: %.3f ms" \
-            [expr {$renderUs / 1000.0 / $renders}]]
-    }
-
-    puts stderr [format "Total parse time: %.3f s" \
-        [expr {$parseUs / 1000000.0}]]
-
-    puts stderr [format "Total render time: %.3f s" \
-        [expr {$renderUs / 1000000.0}]]
-
-    puts stderr [format "Max parse time: %.3f ms" \
-        [expr {[dict get $s maxParseUs] / 1000.0}]]
-
-    puts stderr [format "Max render time: %.3f ms" \
-        [expr {[dict get $s maxRenderUs] / 1000.0}]]
-
-    puts stderr "Max event-loop delay: $::heartbeatMaxDelay ms"
-}
-
-proc cancelLifecycleTimer {variableName} {
-    upvar #0 $variableName timerId
-
-    if {$timerId ne ""} {
-        after cancel $timerId
-        set timerId ""
-    }
-}
-
-proc scheduleShutdownCheck {} {
-    if {![info exists ::shutdownTimer]} {
-        set ::shutdownTimer ""
-    }
-
-    if {$::shutdownTimer ne ""} {
-        return
-    }
-
-    set ::shutdownTimer [after 100 finishShutdown]
-}
-
-proc handleTerminalKey {widget writer encoder keysym character state} {
-    set shift [expr {($state & 0x0001) != 0}]
-    set alt   [expr {($state & 0x0008) != 0}]
-    set ctrl  [expr {($state & 0x0004) != 0}]
-
-    if {$keysym eq "ISO_Left_Tab"} {
-        set keysym "Tab"
-        set shift 0
-    }
-
-    set sequence [$encoder encode $keysym $character $shift $alt $ctrl]
-
-    if {$sequence ne ""} {
-        set bytes [ encoding convertto utf-8 $sequence]
-        $writer send $bytes
-    }
-
-    return -code break
-}
-
-proc closePty {} {
-    if {$::ptyClosed} {
-        return
-    }
-
-    set ::ptyClosed 1
-
-    # Disable callbacks before closing the channel.
-    catch {fileevent $::pty_chan readable {}}
-    catch {$::writer close}
-
-    catch {close $::pty_chan}
-}
-
-proc terminalExited {} {
-    if {$::shuttingDown} {
-        return
-    }
-    cancelLifecycleTimer ::ptyResumeTimer
-
-    reportPipelineStats
-    reportRendererStats
-
-    set ::shuttingDown 1
-
-     # Stop periodic child monitoring.
-    cancelLifecycleTimer ::childMonitorTimer
-
-    cancelLifecycleTimer ::renderTimer
-
-    # Disable further keyboard input.
-    bind .terminal <KeyPress> {}
-
-    cancelLifecycleTimer ::heartbeatTimer
-
-    closePty
-
-    # Hide the window while the child is reaped.
-    wm withdraw .
-
-
-    scheduleShutdownCheck
-}
-
-proc shutdownTerminal {} {
-  terminalExited 
-}
-
-proc finishShutdown {} {
-    set ::shutdownTimer ""
-
-    if {!$::shuttingDown} {
-        return
-    }
-
-    if {$::childReaped} {
-        destroy .
-        return
-    }
-
-    if {[catch {pty::wait $::pid} result]} {
-        puts stderr "waitpid error: $result"
-        destroy .
-        return
-    }
-
-    if {$result ne "running"} {
-        set ::childReaped 1
-        puts "Shell terminated: $result"
-        destroy .
-        return
-    }
-
-    incr ::shutdownAttempts
-
-    if {$::shutdownAttempts == 10} {
-        catch {pty::signal $::pid 15}
-    }
-
-    if {$::shutdownAttempts == 20} {
-        catch {pty::signal $::pid 9}
-    }
-    scheduleShutdownCheck
-}
-
-proc checkChild {} {
-    set ::childMonitorTimer ""
-
-    if {$::shuttingDown || $::childReaped} {
-        return
-    }
-
-    if {[catch {pty::wait $::pid} result]} {
-        puts stderr "Child monitor error: $result"
-        terminalExited
-        return
-    }
-
-    if {$result ne "running"} {
-        set ::childReaped 1
-        terminalExited
-        return
-    }
-
-    set ::childMonitorTimer [after 200 checkChild]
-}
-
-
-proc readpty {} {
-    if {$::shuttingDown || $::ptyClosed} {
-        return
-    }
-
-    # Prevent another readable callback from being
-    # dispatched until this processing turn finishes.
-    fileevent $::pty_chan readable {}
-
-    if {[catch {
-        read $::pty_chan $::ptyReadBudget
-    } data options]} {
-
-        if {[dict exists $options -errorcode] &&
-            [lindex [dict get $options -errorcode] 0] eq "POSIX" &&
-            [lindex [dict get $options -errorcode] 1] eq "EIO"} {
-
-            terminalExited
+        if {$shuttingDown || $ptyClosed} {
             return
         }
 
-        puts stderr "PTY read error: $data"
-        terminalExited
-        return
+        fileevent $ptyChannel readable [list [self] readPty]
     }
 
-    if {$data eq ""} {
-        if {[eof $::pty_chan]} {
-            terminalExited
+    method schedulePtyResume {} {
+        if {$shuttingDown || $ptyClosed || $ptyResumeTimer ne ""} {
             return
         }
 
-        schedulePtyResume
-        return
+        set ptyResumeTimer [after 1 [list [self] resumePtyReading]]
     }
 
-    set start [clock microseconds]
+    method pipelineHeartbeat {} {
+        if {$shuttingDown} {
+            return
+        }
 
-    if {[catch {
-        $::parser feed $data
-    } result options]} {
-        puts stderr "Parser error: $result"
-        puts stderr [dict get $options -errorinfo]
-        terminalExited
-        return
+        set now [clock milliseconds]
+        set elapsed [expr {$now - $heartbeatLast}]
+        set delay [expr {max(0, $elapsed - 100)}]
+
+        if {$delay > $heartbeatMaxDelay} {
+            set heartbeatMaxDelay $delay
+        }
+
+        set heartbeatLast $now
+        set heartbeatTimer [after 100 [list [self] pipelineHeartbeat]]
     }
 
-    set parseUs [expr {
-        [clock microseconds] - $start
-    }]
+    method scheduleTerminalRender {} {
+        if {$shuttingDown || $ptyClosed || $renderTimer ne ""} {
+            return
+        }
 
-    dict incr ::pipelineStats reads
-    dict incr ::pipelineStats bytes [string length $data]
-    dict incr ::pipelineStats parseUs $parseUs
-
-    if {$parseUs > [dict get $::pipelineStats maxParseUs]} {
-        dict set ::pipelineStats maxParseUs $parseUs
+        incr renderScheduled
+        set renderTimer [after \
+            $renderInterval [list [self] flushTerminalRender]]
     }
 
-    # Schedule the next screen update.
-    scheduleTerminalRender
+    method flushTerminalRender {} {
+        set renderTimer ""
 
-    # Allow Tk to process other events before
-    # reading more PTY output.
-    schedulePtyResume
+        if {$shuttingDown || $ptyClosed} {
+            return
+        }
+
+        set start [clock microseconds]
+        $renderer renderDirty
+        set renderUs [expr {[clock microseconds] - $start}]
+
+        incr renderExecuted
+        dict incr pipelineStats renderUs $renderUs
+
+        if {$renderUs > [dict get $pipelineStats maxRenderUs]} {
+            dict set pipelineStats maxRenderUs $renderUs
+        }
+    }
+
+    method reportRendererStats {} {
+        set stats [$renderer statistics]
+        set rows [dict get $stats styledRows]
+        set runs [dict get $stats styleRuns]
+        set buildUs [dict get $stats buildUs]
+        set tkUs [dict get $stats tkUs]
+
+        puts stderr "\nLATerm renderer statistics"
+        puts stderr "---------------------------"
+        puts stderr "Full redraws: [dict get $stats fullRedraws]"
+        puts stderr "Dirty render calls: [dict get $stats dirtyRenders]"
+        puts stderr "Styled rows: $rows"
+        puts stderr "Style runs: $runs"
+
+        if {$rows > 0} {
+            puts stderr [format "Avg style runs/row: %.2f" \
+                [expr {double($runs) / $rows}]]
+            puts stderr [format "Avg row time: %.3f ms" \
+                [expr {($buildUs + $tkUs) / 1000.0 / $rows}]]
+        }
+
+        puts stderr [format "Row construction time: %.3f s" \
+            [expr {$buildUs / 1000000.0}]]
+        puts stderr [format "Tk command time: %.3f s" \
+            [expr {$tkUs / 1000000.0}]]
+        puts stderr [format "Maximum row time: %.3f ms" \
+            [expr {[dict get $stats maxRowUs] / 1000.0}]]
+    }
+
+    method reportPipelineStats {} {
+        set reads [dict get $pipelineStats reads]
+        set bytes [dict get $pipelineStats bytes]
+        set parseUs [dict get $pipelineStats parseUs]
+        set renderUs [dict get $pipelineStats renderUs]
+
+        puts stderr "\nLATerm pipeline statistics"
+        puts stderr "---------------------------"
+        puts stderr "PTY reads: $reads"
+        puts stderr "Bytes processed: $bytes"
+        puts stderr "Render requests: $renderScheduled"
+        puts stderr "Render executions: $renderExecuted"
+
+        if {$renderExecuted > 0} {
+            puts stderr [format "Avg render/execution: %.3f ms" \
+                [expr {$renderUs / 1000.0 / $renderExecuted}]]
+        }
+
+        puts stderr [format "Total parse time: %.3f s" \
+            [expr {$parseUs / 1000000.0}]]
+        puts stderr [format "Total render time: %.3f s" \
+            [expr {$renderUs / 1000000.0}]]
+        puts stderr [format "Max parse time: %.3f ms" \
+            [expr {[dict get $pipelineStats maxParseUs] / 1000.0}]]
+        puts stderr [format "Max render time: %.3f ms" \
+            [expr {[dict get $pipelineStats maxRenderUs] / 1000.0}]]
+        puts stderr "Max event-loop delay: $heartbeatMaxDelay ms"
+    }
+
+    method handleTerminalKey {widget keysym character state} {
+        set shift [expr {($state & 0x0001) != 0}]
+        set alt [expr {($state & 0x0008) != 0}]
+        set ctrl [expr {($state & 0x0004) != 0}]
+
+        if {$keysym eq "ISO_Left_Tab"} {
+            set keysym Tab
+            set shift 0
+        }
+
+        set sequence [$keyboard encode \
+            $keysym $character $shift $alt $ctrl]
+        if {$sequence ne ""} {
+            $writer send [encoding convertto utf-8 $sequence]
+        }
+
+        return -code break
+    }
+
+    method handleMouse {operation button args} {
+        switch -- $operation {
+            motion {
+                set handled [$mouseController motion {*}$args]
+            }
+            default {
+                set handled \
+                    [$mouseController $operation $button {*}$args]
+            }
+        }
+
+        if {$handled} {
+            return -code break
+        }
+    }
+
+    method handleClipboardPaste {widget} {
+        $clipboard paste $widget
+        return -code break
+    }
+
+    method handleClipboardCopy {widget} {
+        $clipboard copySelection $widget
+        return -code break
+    }
+
+    method onPtyWriterFailure {message} {
+        puts stderr "LATerm: PTY write failure: $message"
+
+        if {!$shuttingDown} {
+            after idle [list [self] terminalExited]
+        }
+    }
+
+    method closePty {} {
+        if {$ptyClosed} {
+            return
+        }
+
+        set ptyClosed 1
+        catch {fileevent $ptyChannel readable {}}
+        catch {$writer close}
+        catch {close $ptyChannel}
+    }
+
+    method terminalExited {} {
+        if {$shuttingDown} {
+            return
+        }
+
+        if {$ptyResumeTimer ne ""} {
+            after cancel $ptyResumeTimer
+            set ptyResumeTimer ""
+        }
+
+        my reportPipelineStats
+        my reportRendererStats
+        set shuttingDown 1
+
+        foreach timerId [list \
+            $childMonitorTimer $renderTimer $heartbeatTimer] {
+            if {$timerId ne ""} {
+                after cancel $timerId
+            }
+        }
+        set childMonitorTimer ""
+        set renderTimer ""
+        set heartbeatTimer ""
+
+        bind $terminal <KeyPress> {}
+        my closePty
+        wm withdraw .
+        my scheduleShutdownCheck
+    }
+
+    method shutdownTerminal {} {
+        my terminalExited
+    }
+
+    method scheduleShutdownCheck {} {
+        if {$shutdownTimer eq ""} {
+            set shutdownTimer [after 100 [list [self] finishShutdown]]
+        }
+    }
+
+    method finishShutdown {} {
+        set shutdownTimer ""
+
+        if {!$shuttingDown} {
+            return
+        }
+
+        if {$childReaped} {
+            destroy .
+            return
+        }
+
+        if {[catch {pty::wait $pid} result]} {
+            puts stderr "waitpid error: $result"
+            destroy .
+            return
+        }
+
+        if {$result ne "running"} {
+            set childReaped 1
+            puts "Shell terminated: $result"
+            destroy .
+            return
+        }
+
+        incr shutdownAttempts
+        if {$shutdownAttempts == 10} {
+            catch {pty::signal $pid 15}
+        }
+        if {$shutdownAttempts == 20} {
+            catch {pty::signal $pid 9}
+        }
+
+        my scheduleShutdownCheck
+    }
+
+    method checkChild {} {
+        set childMonitorTimer ""
+
+        if {$shuttingDown || $childReaped} {
+            return
+        }
+
+        if {[catch {pty::wait $pid} result]} {
+            puts stderr "Child monitor error: $result"
+            my terminalExited
+            return
+        }
+
+        if {$result ne "running"} {
+            set childReaped 1
+            my terminalExited
+            return
+        }
+
+        set childMonitorTimer [after 200 [list [self] checkChild]]
+    }
+
+    method readPty {} {
+        if {$shuttingDown || $ptyClosed} {
+            return
+        }
+
+        fileevent $ptyChannel readable {}
+
+        if {[catch {
+            read $ptyChannel $ptyReadBudget
+        } data options]} {
+            if {[dict exists $options -errorcode] &&
+                [lindex [dict get $options -errorcode] 0] eq "POSIX" &&
+                [lindex [dict get $options -errorcode] 1] eq "EIO"} {
+                my terminalExited
+                return
+            }
+
+            puts stderr "PTY read error: $data"
+            my terminalExited
+            return
+        }
+
+        if {$data eq ""} {
+            if {[eof $ptyChannel]} {
+                my terminalExited
+                return
+            }
+
+            my schedulePtyResume
+            return
+        }
+
+        set start [clock microseconds]
+        if {[catch {$parser feed $data} result options]} {
+            puts stderr "Parser error: $result"
+            puts stderr [dict get $options -errorinfo]
+            my terminalExited
+            return
+        }
+
+        set parseUs [expr {[clock microseconds] - $start}]
+        dict incr pipelineStats reads
+        dict incr pipelineStats bytes [string length $data]
+        dict incr pipelineStats parseUs $parseUs
+
+        if {$parseUs > [dict get $pipelineStats maxParseUs]} {
+            dict set pipelineStats maxParseUs $parseUs
+        }
+
+        my scheduleTerminalRender
+        my schedulePtyResume
+    }
 }
 
-
-
-
-
-fconfigure $pty_chan -translation binary -blocking no -buffering none -encoding binary
-fileevent $pty_chan readable readpty
-
-set pid [pty::spawn $pty_chan $pty_file /bin/bash -i]
-
-pty::resize $::pty_chan 40 120
-set ::childMonitorTimer [after 200 checkChild]
-
-wm title . 'LATerm'
-wm protocol . WM_DELETE_WINDOW shutdownTerminal
-
-set fontName [.terminal cget -font]
-set cellWidth  [font measure $fontName "M"]
-set cellHeight [font metrics $fontName -linespace]
-
-set resizeController [::laterm::ResizeController new .terminal $screen $pty_chan]
-
-.terminal configure \
-    -wrap none \
-    -selectbackground "#365a85" \
-    -selectforeground "#ffffff" \
-    -inactiveselectbackground "#365a85" \
-    -exportselection 1 \
-    -takefocus 1
-
-
-pack .terminal -fill both -expand true
-bind .terminal <KeyPress> {handleTerminalKey %W $::writer $keyboard %K %A %s}
-focus .terminal
-
-
-# Install before the widget and Text class binding tags.
-set tags [bindtags .terminal]
-
-if {"LATermMouse" ni $tags} {
-    bindtags .terminal [linsert $tags 0 LATermMouse]
-}
-
-bind LATermMouse <ButtonPress-1> {
-    if {[$mouseController press 1 %x %y %s]} break
-}
-
-bind LATermMouse <ButtonRelease-1> {
-    if {[$mouseController release 1 %x %y %s]} break
-}
-
-bind LATermMouse <ButtonPress-2> {
-    if {[$mouseController press 2 %x %y %s]} break
-}
-
-bind LATermMouse <ButtonRelease-2> {
-    if {[$mouseController release 2 %x %y %s]} break
-}
-
-bind LATermMouse <ButtonPress-3> {
-    if {[$mouseController press 3 %x %y %s]} break
-}
-
-bind LATermMouse <ButtonRelease-3> {
-    if {[$mouseController release 3 %x %y %s]} break
-}
-
-bind LATermMouse <Motion> {
-    if {[$mouseController motion %x %y %s]} break
-}
-
-# X11 wheel events.
-bind LATermMouse <ButtonPress-4> {
-    if {[$mouseController wheel wheel-up %x %y %s]} break
-}
-
-bind LATermMouse <ButtonPress-5> {
-    if {[$mouseController wheel wheel-down %x %y %s]} break
-}
-
-bind .terminal <FocusIn> {
-    $focusController send 1
-}
-
-bind .terminal <FocusOut> {
-    $focusController send 0
-}
-
-bind .terminal <Control-Shift-KeyPress-V> {
-    $clipboard paste %W
-    break
-}
-
-bind .terminal <Control-Shift-KeyPress-C> {
-    $clipboard copySelection %W
-    break
-}
+set ::latermApplication [::LATerm::Application new]

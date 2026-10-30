@@ -1,7 +1,7 @@
 
-namespace eval ::laterm {}
+namespace eval ::LATerm {}
 
-oo::class create ::laterm::CursorOverlay {
+oo::class create ::LATerm::CursorOverlay {
     variable canvas screen textWidget
     variable cursorColor
     variable blinkVisible blinkTimer

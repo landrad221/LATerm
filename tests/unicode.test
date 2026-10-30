@@ -6,39 +6,39 @@ source [file join \
     [file dirname [info script]] .. unicode.tcl]
 
 test unicode-001 {ASCII width} -body {
-    ::laterm::unicode::charWidth A
+    ::LATerm::unicode::charWidth A
 } -result 1
 
 test unicode-002 {Latin accented character} -body {
-    ::laterm::unicode::charWidth é
+    ::LATerm::unicode::charWidth é
 } -result 1
 
 test unicode-003 {CJK wide character} -body {
-    ::laterm::unicode::charWidth 中
+    ::LATerm::unicode::charWidth 中
 } -result 2
 
 test unicode-004 {another CJK character} -body {
-    ::laterm::unicode::charWidth 界
+    ::LATerm::unicode::charWidth 界
 } -result 2
 
 test unicode-005 {combining acute accent} -body {
-    ::laterm::unicode::charWidth "\u0301"
+    ::LATerm::unicode::charWidth "\u0301"
 } -result 0
 
 test unicode-006 {emoji} -body {
-    ::laterm::unicode::charWidth 😀
+    ::LATerm::unicode::charWidth 😀
 } -result 2
 
 test unicode-007 {control character} -body {
-    ::laterm::unicode::charWidth "\n"
+    ::LATerm::unicode::charWidth "\n"
 } -result 0
 
 test unicode-008 {ASCII digit} -body {
-    ::laterm::unicode::charWidth 7
+    ::LATerm::unicode::charWidth 7
 } -result 1
 
 test unicode-009 {variation selector} -body {
-    ::laterm::unicode::charWidth "\uFE0F"
+    ::LATerm::unicode::charWidth "\uFE0F"
 } -result 0
 
 ::tcltest::cleanupTests

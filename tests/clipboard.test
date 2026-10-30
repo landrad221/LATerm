@@ -26,7 +26,7 @@ oo::class create ::ClipboardMockWriter {
 }
 
 proc clipboardPipeline {} {
-    set s [::laterm::Screen new 5 20]
+    set s [::LATerm::Screen new 5 20]
     set a [::LATerm::ScreenAdapter new $s]
     set p [::LATerm::Parser new [list $a event]]
 
