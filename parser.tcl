@@ -5,6 +5,9 @@ namespace eval ::LATerm {}
     variable oscBuffer
     variable dcsBuffer
 
+    # handler is a command prefix that accepts parser event arguments:
+    # print/byte/control/escape plus payload, csi plus params,
+    # intermediates, final, or osc/dcs plus their string payload.
     constructor {handler} {
         set callback $handler
         set oscBuffer ""
@@ -12,18 +15,26 @@ namespace eval ::LATerm {}
         my reset
     }
 
+    # Discard partial CSI/ESC state and return to ground. OSC/DCS buffers
+    # are reset when a new string sequence starts or is terminated.
     method reset {} {
         set state GROUND
         set params ""
         set intermediates ""
     }
 
+    # Return the current parser state name (for example GROUND or CSI).
     method state {} { return $state }
 
+    # Invoke the configured callback with the event tuple in args.
     method emit {args} {
         {*}$callback {*}$args
     }
 
+    # Consume a byte string incrementally. bytes may end in the middle of
+    # a UTF-8 character or escape sequence; parser state is retained so a
+    # later call can complete it. The callback receives decoded ASCII
+    # control/escape events and raw high-byte values for UTF-8 decoding.
     method feed {bytes} {
         binary scan $bytes cu* octets
         foreach b $octets {
@@ -209,6 +220,7 @@ namespace eval ::LATerm {}
         }
     }
 
+    # Map an integer C0/DEL byte (0..32 or 127) to its symbolic name.
     method controlName {b} {
         set names {NUL SOH STX ETX EOT ENQ ACK BEL BS HT LF VT FF CR SO SI DLE DC1 DC2 DC3 DC4 NAK SYN ETB CAN EM SUB ESC FS GS RS US}
         return [lindex $names $b]

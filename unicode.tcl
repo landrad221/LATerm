@@ -2,6 +2,9 @@
 namespace eval ::LATerm::unicode {
     namespace export charWidth codepoint
 
+    # Return the Unicode scalar value represented by one Tcl character.
+    # char is a nonempty Tcl string containing one character; returns an
+    # integer code point. Empty input raises an error.
     proc codepoint {char} {
         if {[string length $char] == 0} {
             error "empty character"
@@ -11,6 +14,8 @@ namespace eval ::LATerm::unicode {
         return $cp
     }
 
+    # Test whether integer code point cp lies in one of the inclusive
+    # {first last} pairs in ranges. Returns the boolean integer 0 or 1.
     proc inRanges {cp ranges} {
         foreach {first last} $ranges {
             if {$cp >= $first && $cp <= $last} {
@@ -108,6 +113,10 @@ namespace eval ::LATerm::unicode {
     }
 
 
+    # Estimate terminal-cell width for one Unicode character.
+    # char is one Tcl character; returns 0 for controls/combining marks,
+    # 2 for characters in the maintained wide-character table, otherwise
+    # 1. This is a compact width table, not a full Unicode grapheme engine.
     proc charWidth {char} {
         variable combiningRanges
         variable wideRanges
@@ -140,4 +149,3 @@ namespace eval ::LATerm::unicode {
         return 1
 }
 }
-

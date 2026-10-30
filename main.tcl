@@ -19,6 +19,10 @@ source pty_writer.tcl
 namespace eval ::LATerm {}
 
 oo::class create ::LATerm::Application {
+    # Owns the Tk widgets, terminal model, PTY channel/child process,
+    # controllers, and every event-loop callback that references them.
+    # Keeping those resources together makes shutdown cancel callbacks
+    # before destroying the window or channel.
     variable terminal cursorCanvas
     variable ptyChannel ptyFile pid
     variable writer screen adapter parser renderer keyboard clipboard
@@ -31,6 +35,7 @@ oo::class create ::LATerm::Application {
     variable heartbeatTimer heartbeatLast heartbeatMaxDelay
     variable pipelineStats
 
+    # Initialize lifecycle flags/statistics, then build and start LATerm.
     constructor {} {
         set terminal .terminal
         set cursorCanvas .cursorOverlay
@@ -62,6 +67,9 @@ oo::class create ::LATerm::Application {
         my initialize
     }
 
+    # Create widgets and terminal components, attach callbacks, and spawn
+    # the interactive shell. PTY data is handled asynchronously by
+    # readPty; the read budget limits work per event-loop callback.
     method initialize {} {
         set cursorCanvas [canvas $cursorCanvas]
         text $terminal
@@ -129,6 +137,9 @@ oo::class create ::LATerm::Application {
         my installBindings
     }
 
+    # Install terminal mouse, focus, clipboard, and keyboard bindings.
+    # The custom bindtag runs before Tk's default Text selection bindings,
+    # allowing terminal mouse-reporting modes to consume those events.
     method installBindings {} {
         bind LATermMouse <ButtonPress-1> \
             [list [self] handleMouse press 1 %x %y %s]
@@ -157,6 +168,8 @@ oo::class create ::LATerm::Application {
             [list [self] handleClipboardCopy %W]
     }
 
+    # Re-enable readable notifications after the one-millisecond yield.
+    # Tk after callback; no arguments or return value.
     method resumePtyReading {} {
         set ptyResumeTimer ""
 
@@ -167,6 +180,8 @@ oo::class create ::LATerm::Application {
         fileevent $ptyChannel readable [list [self] readPty]
     }
 
+    # Yield to other Tk events before re-enabling PTY reads. This bounds
+    # time spent processing a continuously readable child process.
     method schedulePtyResume {} {
         if {$shuttingDown || $ptyClosed || $ptyResumeTimer ne ""} {
             return
@@ -175,6 +190,8 @@ oo::class create ::LATerm::Application {
         set ptyResumeTimer [after 1 [list [self] resumePtyReading]]
     }
 
+    # Sample actual event-loop delay against the expected 100 ms timer.
+    # This metric includes time spent in all Tk callbacks.
     method pipelineHeartbeat {} {
         if {$shuttingDown} {
             return
@@ -192,6 +209,8 @@ oo::class create ::LATerm::Application {
         set heartbeatTimer [after 100 [list [self] pipelineHeartbeat]]
     }
 
+    # Coalesce multiple PTY updates into one render after renderInterval
+    # milliseconds; at most one render timer may be pending.
     method scheduleTerminalRender {} {
         if {$shuttingDown || $ptyClosed || $renderTimer ne ""} {
             return
@@ -202,6 +221,8 @@ oo::class create ::LATerm::Application {
             $renderInterval [list [self] flushTerminalRender]]
     }
 
+    # Render accumulated dirty state once and update cumulative timing.
+    # Tk after callback; no arguments or return value.
     method flushTerminalRender {} {
         set renderTimer ""
 
@@ -221,6 +242,7 @@ oo::class create ::LATerm::Application {
         }
     }
 
+    # Print renderer-level counters/timings to stderr during shutdown.
     method reportRendererStats {} {
         set stats [$renderer statistics]
         set rows [dict get $stats styledRows]
@@ -250,6 +272,7 @@ oo::class create ::LATerm::Application {
             [expr {[dict get $stats maxRowUs] / 1000.0}]]
     }
 
+    # Print PTY, parsing, render, and event-loop counters to stderr.
     method reportPipelineStats {} {
         set reads [dict get $pipelineStats reads]
         set bytes [dict get $pipelineStats bytes]
@@ -279,6 +302,10 @@ oo::class create ::LATerm::Application {
         puts stderr "Max event-loop delay: $heartbeatMaxDelay ms"
     }
 
+    # Process a Tk KeyPress binding. widget is a widget path, keysym and
+    # character are Tk event strings, and state is Tk's integer modifier
+    # mask. Encoded UTF-8 bytes are queued to the PTY; always return Tk's
+    # break code to prevent the Text widget from editing terminal output.
     method handleTerminalKey {widget keysym character state} {
         set shift [expr {($state & 0x0001) != 0}]
         set alt [expr {($state & 0x0008) != 0}]
@@ -298,6 +325,10 @@ oo::class create ::LATerm::Application {
         return -code break
     }
 
+    # Dispatch mouse events from the custom bindtag. operation is motion,
+    # press, release, or wheel; button is a button number/direction string;
+    # args contains the callback-specific integer x, y, and state values.
+    # Return Tk's break code only when MouseController consumed the event.
     method handleMouse {operation button args} {
         switch -- $operation {
             motion {
@@ -314,16 +345,22 @@ oo::class create ::LATerm::Application {
         }
     }
 
+    # Handle Ctrl+Shift+V for the Tk widget path; always stop Tk's default
+    # key handling after delegating clipboard work.
     method handleClipboardPaste {widget} {
         $clipboard paste $widget
         return -code break
     }
 
+    # Handle Ctrl+Shift+C for the Tk widget path and suppress default
+    # Text-widget handling.
     method handleClipboardCopy {widget} {
         $clipboard copySelection $widget
         return -code break
     }
 
+    # Receive a PTY writer error message and defer shutdown until idle so
+    # writer failure handling does not recursively close the writer.
     method onPtyWriterFailure {message} {
         puts stderr "LATerm: PTY write failure: $message"
 
@@ -332,6 +369,9 @@ oo::class create ::LATerm::Application {
         }
     }
 
+    # Idempotently stop PTY notifications and close writer/channel state.
+    # The ptyClosed flag prevents queued callbacks from using a closed
+    # channel.
     method closePty {} {
         if {$ptyClosed} {
             return
@@ -343,6 +383,8 @@ oo::class create ::LATerm::Application {
         catch {close $ptyChannel}
     }
 
+    # Begin application shutdown once: stop timers/input, report metrics,
+    # close the PTY, hide the window, and start child-reaping checks.
     method terminalExited {} {
         if {$shuttingDown} {
             return
@@ -373,16 +415,20 @@ oo::class create ::LATerm::Application {
         my scheduleShutdownCheck
     }
 
+    # WM_DELETE_WINDOW callback. Delegates to the shared shutdown path.
     method shutdownTerminal {} {
         my terminalExited
     }
 
+    # Ensure only one delayed child-reaping check is pending.
     method scheduleShutdownCheck {} {
         if {$shutdownTimer eq ""} {
             set shutdownTimer [after 100 [list [self] finishShutdown]]
         }
     }
 
+    # Poll the child process. If it remains alive, retry and escalate from
+    # SIGTERM to SIGKILL after bounded intervals before checking again.
     method finishShutdown {} {
         set shutdownTimer ""
 
@@ -419,6 +465,8 @@ oo::class create ::LATerm::Application {
         my scheduleShutdownCheck
     }
 
+    # Periodically detect a child that exited independently of PTY EOF.
+    # pty::wait returns "running" while the process is still alive.
     method checkChild {} {
         set childMonitorTimer ""
 
@@ -441,6 +489,9 @@ oo::class create ::LATerm::Application {
         set childMonitorTimer [after 200 [list [self] checkChild]]
     }
 
+    # Read at most ptyReadBudget bytes per callback, parse them, and
+    # schedule rendering/another read. Read events are temporarily removed
+    # so the application can yield instead of monopolizing Tk's event loop.
     method readPty {} {
         if {$shuttingDown || $ptyClosed} {
             return

@@ -4,10 +4,17 @@ namespace eval ::LATerm {}
 oo::class create ::LATerm::MouseEncoder {
     variable screen
 
+    # screenObject is the Screen model used to read mouse modes and size.
     constructor {screenObject} {
         set screen $screenObject
     }
 
+    # Encode a mouse event using the active terminal protocol.
+    # kind is press, release, drag, move, wheel-up, or wheel-down;
+    # button is a Tk button number (1..3) for button events (unused for
+    # move/wheel), row/col are zero-based screen cells, and shift/alt/ctrl
+    # are boolean-like modifier flags.
+    # Returns protocol bytes, or "" when the event is not reportable.
     method encode {kind button row col {shift 0} {alt 0} {ctrl 0}} {
         if {![$screen mouseReportingEnabled]} {
             return ""
@@ -76,10 +83,9 @@ oo::class create ::LATerm::MouseEncoder {
                 $code $x $y $final]
         }
 
-        # Traditional X10 mouse encoding:
-        # ESC [ M, followed by three single-byte values.
-        #
-        # Coordinates must fit in the legacy protocol.
+        # Legacy X10 encodes button and one-based coordinates as bytes
+        # offset by 32. Its coordinate fields cannot represent values
+        # above 223, so out-of-range events are intentionally omitted.
         if {$x > 223 || $y > 223} {
             return ""
         }

@@ -4,10 +4,18 @@ namespace eval ::LATerm {}
 oo::class create ::LATerm::KeyboardEncoder {
     variable screen
 
+    # screenObject is a Screen object used to select normal versus
+    # application cursor-key sequences.
+    # Type: TclOO object command.
     constructor {screenObject} {
         set screen $screenObject
     }
 
+    # Encode one Tk key event as bytes for the child terminal.
+    # keysym and character are Tk's symbolic key name and translated text;
+    # shift, alt, and ctrl are boolean-like Tk modifier flags (0 or 1).
+    # Returns a Tcl string containing the terminal sequence, or "" if the
+    # event has no representable character.
     method encode {keysym character {shift 0} {alt 0} {ctrl 0}} {
         set shift [expr {$shift ? 1 : 0}]
         set alt   [expr {$alt ? 1 : 0}]
@@ -16,7 +24,8 @@ oo::class create ::LATerm::KeyboardEncoder {
         set modifier [expr {1 + $shift + 2*$alt + 4*$ctrl}]
         set esc "\033"
 
-        # Cursor keys and Home/End.
+        # Cursor keys and Home/End use CSI normally, but SS3 when the
+        # application-cursor mode is active and no modifiers are held.
         set cursorCodes [dict create \
             Up A Down B Right C Left D \
             Home H End F]
@@ -92,7 +101,8 @@ oo::class create ::LATerm::KeyboardEncoder {
             }
         }
 
-        # Ctrl + alphabetic character produces a C0 control.
+        # Ctrl + alphabetic character produces the corresponding C0 code
+        # by subtracting '@' (64) from the uppercase ASCII code point.
         if {$ctrl && [regexp -nocase {^[a-z]$} $keysym]} {
             scan [string toupper $keysym] %c code
             set output [format %c [expr {$code - 64}]]

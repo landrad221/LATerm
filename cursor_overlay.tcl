@@ -7,6 +7,10 @@ oo::class create ::LATerm::CursorOverlay {
     variable blinkVisible blinkTimer
     variable renderer
 
+    # canvasWidget is a Canvas path used as the cursor overlay;
+    # textWidgetPath is the rendered Text widget; rendererObject provides
+    # cursorIndex; screenObject provides cursor visibility/style state.
+    # color is a Tk color string used as the overlay background.
     constructor {canvasWidget textWidgetPath rendererObject screenObject {color "#1D4ED8"}} {
         set canvas $canvasWidget
         set textWidget $textWidgetPath
@@ -32,6 +36,8 @@ oo::class create ::LATerm::CursorOverlay {
         place forget $canvas
     }
 
+    # Restart blinking from the visible phase and draw at the current cell.
+    # No arguments or return value.
     method refresh {} {
         if {$blinkTimer ne ""} {
             after cancel $blinkTimer
@@ -45,10 +51,14 @@ oo::class create ::LATerm::CursorOverlay {
             set blinkTimer [after 600 [list [self] blink]]
         }
     }
+    # Reposition the overlay after text layout or cursor movement changes.
+    # No arguments or return value.
     method updatePosition {} {
        my draw
     }
 
+    # Advance one blink phase and schedule the next timer when appropriate.
+    # Invoked by Tk's after callback; no arguments or return value.
     method blink {} {
         set blinkTimer ""
         
@@ -69,6 +79,9 @@ oo::class create ::LATerm::CursorOverlay {
         set blinkTimer [after 600 [list [self] blink]]
     }
 
+    # Place and size the overlay according to the screen cursor shape.
+    # If the cursor is hidden or has no visible Text bounding box, hide it.
+    # No arguments or return value.
     method draw {} {
 
          if {![$screen cursorVisible] || !$blinkVisible} {
@@ -76,7 +89,6 @@ oo::class create ::LATerm::CursorOverlay {
             return
         }
 
-        # Adapt this accessor to the existing Screen API.
         lassign [$screen cursor] row col
 
         set index [$renderer cursorIndex]

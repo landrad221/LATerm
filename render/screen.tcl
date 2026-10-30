@@ -4,6 +4,10 @@ namespace eval ::LATerm {}
 source [file join [file dirname [info script]] "../unicode.tcl"]
 
 oo::class create ::LATerm::Screen {
+    # Screen invariant: each row contains exactly cols cell dictionaries.
+    # A width-2 leading cell is immediately followed by a width-0
+    # continuation cell; other cells have width 1. Cursor and dirty
+    # coordinates are zero-based. The renderer consumes dirty ranges.
     variable rows cols grid
     variable cursorRow cursorCol wrapPending attrs
     variable scrollTop scrollBottom tabStops
@@ -19,6 +23,9 @@ oo::class create ::LATerm::Screen {
     variable focusReporting
     variable cursorStyle
 
+    # Create a rows-by-columns grid. height/width are positive integers;
+    # historyLimit is a nonnegative integer count of primary-screen rows
+    # retained in scrollback (0 disables history).
     constructor {height width {historyLimit 1000}} {
         if {![string is integer -strict $historyLimit] ||
            $historyLimit < 0} {
@@ -79,6 +86,8 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Set the DECSCUSR style code (integer 0..6); invalid values are
+    # ignored. Codes pair shape and blinking state.
     method setCursorStyle {style} {
         if {![string is integer -strict $style]} {
             return
@@ -108,6 +117,7 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Enable/disable DEC focus reporting. enabled is boolean-like.
     method setFocusReporting {enabled} {
         set focusReporting [expr {$enabled ? 1 : 0}]
     }
@@ -116,6 +126,9 @@ oo::class create ::LATerm::Screen {
         return $focusReporting
     }
 
+    # Set a supported mouse mode (1000, 1002, 1003, or 1006).
+    # mode is an integer mode number; enabled is boolean-like. Unknown
+    # modes are ignored.
     method setMouseMode {mode enabled} {
         if {![dict exists $mouseModes $mode]} {
             return
@@ -124,6 +137,8 @@ oo::class create ::LATerm::Screen {
         dict set mouseModes $mode [expr {$enabled ? 1 : 0}]
     }
 
+    # Return the boolean state of a supported mouse mode; unknown modes
+    # return 0. mode is an integer DEC private-mode number.
     method mouseMode {mode} {
         if {![dict exists $mouseModes $mode]} {
             return 0
@@ -152,6 +167,7 @@ oo::class create ::LATerm::Screen {
         return $bracketedPaste
     }
 
+    # Enable or disable bracketed paste; enabled is boolean-like.
     method setBracketedPaste {enabled} {
         set bracketedPaste [expr {$enabled ? 1 : 0}]
     }
@@ -162,10 +178,14 @@ oo::class create ::LATerm::Screen {
         return $applicationCursorKeys
     }
 
+    # Select application cursor-key encoding when enabled is true.
     method setApplicationCursorKeys {enabled} {
         set applicationCursorKeys [expr {$enabled ? 1 : 0}]
     }
 
+    # Resize the active and saved buffers to positive integer dimensions.
+    # Existing top rows/columns are retained, new cells are blank, and
+    # cursors/margins/tab stops are clamped or regenerated as needed.
     method resize {newRows newCols} {
         if {![string is integer -strict $newRows] ||
             ![string is integer -strict $newCols] ||
@@ -227,6 +247,8 @@ oo::class create ::LATerm::Screen {
         return $cursorVisible
     }
 
+    # Set cursor visibility from a boolean-like value and mark the cursor
+    # dirty only when visibility changes.
     method setCursorVisible {visible} {
         set visible [expr {$visible ? 1 : 0}]
 
@@ -237,6 +259,9 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Merge a dictionary of supported cell attributes into the current
+    # rendition. changes may contain fg/bg color strings or "default",
+    # and boolean-like bold/italic/underline/inverse values.
     method setAttributes {changes} {
         dict for {name value} $changes {
             if {$name ni {
@@ -295,6 +320,9 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Replace the alternate buffer with a fresh blank state. If alternate
+    # is active, clear it in place and home its cursor; otherwise replace
+    # the saved inactive alternate snapshot.
     method clearAlternateBuffer {} {
         if {$activeBuffer eq "alternate"} {
             # Clear the currently visible alternate buffer.
@@ -319,6 +347,9 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Apply a DEC private mode number and boolean-like enabled state.
+    # This method coordinates buffer switching and cursor save/restore for
+    # modes 47/1047/1048/1049; unsupported modes are ignored.
     method setPrivateMode {mode enabled} {
         set enabled [expr {!!$enabled}]
 
@@ -391,6 +422,8 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Append one row (a list of cell dictionaries) to bounded history.
+    # Oldest rows are discarded when scrollbackLimit is exceeded.
     method appendScrollback {line} {
         if {$scrollbackLimit == 0} {
             return
@@ -415,6 +448,8 @@ oo::class create ::LATerm::Screen {
         return $scrollbackLimit
     }
 
+    # Return the zero-based scrollback row at integer index; out-of-range
+    # values raise an error.
     method scrollbackRow {index} {
         if {![string is integer -strict $index] ||
             $index < 0 ||
@@ -429,6 +464,8 @@ oo::class create ::LATerm::Screen {
         set scrollback {}
     }
 
+    # Change the history capacity to a nonnegative integer row count.
+    # Reducing the limit immediately discards the oldest excess rows.
     method setScrollbackLimit {limit} {
         if {![string is integer -strict $limit] ||
             $limit < 0} {
@@ -452,6 +489,9 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Return a dictionary snapshot of the active buffer's grid, cursor,
+    # wrap state, scrolling region, tab stops, and current attributes.
+    # The snapshot is suitable for restoreState or buffer switching.
     method captureState {} {
         return [dict create \
             grid $grid \
@@ -464,6 +504,9 @@ oo::class create ::LATerm::Screen {
             attrs $attrs]
     }
 
+    # Restore a snapshot dictionary previously returned by captureState.
+    # The snapshot is trusted to contain a grid and cursor/margin/attribute
+    # fields matching this screen's dimensions; the full screen is dirtied.
     method restoreState {state} {
         set grid [dict get $state grid]
         set cursorRow [dict get $state cursorRow]
@@ -500,6 +543,8 @@ oo::class create ::LATerm::Screen {
 
 
 
+    # Switch to the alternate screen while preserving primary state.
+    # Re-entry preserves the existing alternate snapshot.
     method enterAlternate {} {
         if {$activeBuffer eq "alternate"} {
             return
@@ -518,6 +563,8 @@ oo::class create ::LATerm::Screen {
         my restoreState $alternateState
     }
 
+    # Save the current alternate state and restore the primary snapshot.
+    # Calling this while already on primary is a no-op.
     method leaveAlternate {} {
         if {$activeBuffer eq "primary"} {
             return
@@ -535,6 +582,9 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Resize a row (list of cell dictionaries) to integer newCols, padding
+    # with blanks or truncating on the right. If truncation splits a wide
+    # glyph, its remaining leading cell is replaced with a blank.
     method resizeRow {line newCols} {
         set oldCols [llength $line]
 
@@ -561,6 +611,8 @@ oo::class create ::LATerm::Screen {
         return $line
     }
 
+    # Resize a grid (list of rows) to integer newRows/newCols, preserving
+    # rows from the top and columns from the left.
     method resizeGrid {oldGrid newRows newCols} {
         set newGrid {}
         set oldRows [llength $oldGrid]
@@ -587,6 +639,8 @@ oo::class create ::LATerm::Screen {
         return $newGrid
     }
 
+    # Resize a saved-buffer snapshot dictionary. Empty snapshots stay
+    # empty; cursor and margins are clamped/reset for the new dimensions.
     method resizeState {state newRows newCols} {
         if {$state eq ""} {
             return {}
@@ -617,6 +671,8 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Return zero-based tab-stop columns at every eighth column below the
+    # integer screen width.
     method defaultTabStops {width} {
         set stops {}
 
@@ -637,6 +693,8 @@ oo::class create ::LATerm::Screen {
 
 
     
+    # Clear the complete glyph intersecting zero-based row/col. A wide
+    # glyph and its continuation are always cleared together.
     method clearGlyphAt {row col} {
         my checkPosition $row $col
 
@@ -680,6 +738,9 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Attach a zero-width combining character to the preceding printable
+    # glyph. The cursor's pending-wrap flag determines whether that glyph
+    # is at cursorCol or immediately before it.
     method appendCombining {ch} {
         # If wrap is pending, the previous glyph is
         # at the current cursor position.
@@ -720,6 +781,9 @@ oo::class create ::LATerm::Screen {
             [expr {min($cols - 1, $col + $width - 1)}]
     }
 
+    # Add an inclusive zero-based column range to a row's dirty set.
+    # Overlapping and adjacent ranges are merged; invalid rows raise an
+    # error and ranges are clipped to the screen width.
     method markDirty {row start end} {
         if {$row < 0 || $row >= $rows} {
             error "dirty row out of range"
@@ -788,6 +852,7 @@ oo::class create ::LATerm::Screen {
         dict set dirtyRows $row $merged
     }
 
+    # Mark every column of zero-based row dirty.
     method markRowDirty {row} {
         my markDirty $row 0 [expr {$cols - 1}]
     }
@@ -798,6 +863,8 @@ oo::class create ::LATerm::Screen {
         }
     }
 
+    # Return {rows <row-to-ranges dict> cursor <boolean>} and clear the
+    # pending dirty state. This is the renderer's acknowledge operation.
     method consumeDirty {} {
         set result [dict create \
             rows $dirtyRows \
@@ -809,6 +876,7 @@ oo::class create ::LATerm::Screen {
         return $result
     }
 
+    # Return the current dirty metadata without acknowledging/clearing it.
     method peekDirty {} {
         return [dict create \
             rows $dirtyRows \
@@ -829,10 +897,12 @@ oo::class create ::LATerm::Screen {
         return $line
     }
 
+    # Return {rowCount columnCount}; dimensions are positive integers.
     method dimensions {} {
         return [list $rows $cols]
     }
 
+    # Return {row column} using zero-based screen coordinates.
     method cursor {} {
         return [list $cursorRow $cursorCol]
     }
@@ -845,6 +915,8 @@ oo::class create ::LATerm::Screen {
         return [list $scrollTop $scrollBottom]
     }
 
+    # Validate a zero-based integer cell coordinate; raise an error when
+    # it lies outside the current grid.
     method checkPosition {row col} {
         if {![string is integer -strict $row] ||
             ![string is integer -strict $col] ||
@@ -854,11 +926,13 @@ oo::class create ::LATerm::Screen {
         }
     }
 
+    # Return the cell dictionary at zero-based integer row/col.
     method cell {row col} {
         my checkPosition $row $col
         return [lindex $grid $row $col]
     }
 
+    # Move the cursor to zero-based integer row/col, clearing delayed wrap.
     method moveCursor {row col} {
         my checkPosition $row $col
         set cursorRow $row
@@ -868,6 +942,8 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Assert that zero-based row has valid wide-character leading and
+    # continuation-cell pairs. Returns 1 or raises an invariant error.
     method validateRow {row} {
         if {![string is integer -strict $row] ||
             $row < 0 || $row >= $rows} {
@@ -930,6 +1006,9 @@ oo::class create ::LATerm::Screen {
     # ------------------------------
 
 
+    # Scroll the active region upward by a nonnegative integer count,
+    # capped at the region height. Only full-screen primary-buffer
+    # scrolling appends removed rows to scrollback.
     method scrollUp {{count 1}} {
         if {![string is integer -strict $count] || $count < 0} {
             error "invalid scroll count"
@@ -972,6 +1051,8 @@ oo::class create ::LATerm::Screen {
         }
     }
 
+    # Scroll the active region downward by a nonnegative integer count,
+    # capped at the region height. Newly exposed rows are blank.
     method scrollDown {{count 1}} {
         if {![string is integer -strict $count] || $count < 0} {
             error "invalid scroll count"
@@ -990,6 +1071,8 @@ oo::class create ::LATerm::Screen {
         }
     }
 
+    # Set inclusive zero-based scrolling margins. top and bottom must be
+    # integers within the screen, with top < bottom; cursor moves home.
     method setScrollRegion {top bottom} {
         if {![string is integer -strict $top] ||
             ![string is integer -strict $bottom] ||
@@ -1068,6 +1151,11 @@ oo::class create ::LATerm::Screen {
     # ------------------------------
 
 
+    # Print a Tcl string of printable Unicode characters. Width is
+    # determined by LATerm::unicode::charWidth; C0/C1 controls are rejected
+    # because Parser/ScreenAdapter must process them as terminal actions.
+    # Combining marks attach to the previous glyph, wide glyphs occupy a
+    # leading/continuation pair, and wrapping is delayed until next print.
     method print {text} {
         foreach ch [split $text ""] {
             set width [::LATerm::unicode::charWidth $ch]
@@ -1163,6 +1251,8 @@ oo::class create ::LATerm::Screen {
     # Debugging
     # ------------------------------
 
+    # Return visible rows joined by newline. Wide continuation cells are
+    # included as empty text, so the resulting string is display-oriented.
     method dump {} {
         set lines {}
 
@@ -1177,6 +1267,8 @@ oo::class create ::LATerm::Screen {
         return [join $lines "\n"]
     }
     
+    # Return scrollback rows as text joined by newline; cell widths and
+    # attributes are not included in this debug representation.
     method dumpScrollback {} {
         set lines {}
 
@@ -1194,6 +1286,8 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Return a diagnostic grid where continuation cells appear as dots.
+    # This makes wide-cell structure visible when debugging invariants.
     method dumpCells {} {
         set lines {}
 
@@ -1217,10 +1311,9 @@ oo::class create ::LATerm::Screen {
     }
 
     
-    # Replace cells from start through end (inclusive).
-#
-#
-# 
+    # Replace inclusive zero-based columns start..end in zero-based row
+    # with current-attribute blank cells. Boundaries expand when they
+    # intersect a wide glyph so no orphan continuation is left behind.
     method eraseRange {row start end} {
         if {![string is integer -strict $row] ||
             $row < 0 || $row >= $rows} {
@@ -1257,8 +1350,9 @@ oo::class create ::LATerm::Screen {
         my markDirty $row $start $end
     }
 
-    # Validate and normalize CSI counts.
-    # A count of zero behaves like one.
+    # Validate a nonnegative integer terminal count and normalize zero to
+    # one, as required by cursor/editing commands that treat omitted or
+    # zero counts as a single operation.
     method normalizeCount {count} {
         if {![string is integer -strict $count] || $count < 0} {
             error "invalid count"
@@ -1268,6 +1362,9 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Repair malformed wide-character pairs in zero-based row after
+    # insertion/deletion shifts cells; invalid leading/continuation cells
+    # are replaced with blanks and marked dirty.
     method repairRow {row} {
         set line [lindex $grid $row]
         set changed {}
@@ -1298,6 +1395,8 @@ oo::class create ::LATerm::Screen {
         }
     }
     
+    # Execute EL mode 0 (cursor to end), 1 (start to cursor), or 2 (whole
+    # row). mode is an integer; unsupported values raise an error.
     method eraseInLine {{mode 0}} {
         switch -- $mode {
             0 {
@@ -1318,6 +1417,9 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Execute ED mode 0 (cursor to end), 1 (start to cursor), 2 (whole
+    # screen), or 3 (currently a no-op). mode is an integer; unsupported
+    # values raise an error. Scrollback erase mode 3 is not implemented.
     method eraseInDisplay {{mode 0}} {
         switch -- $mode {
             0 {
@@ -1352,6 +1454,8 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Erase count cells starting at the cursor. count is a nonnegative
+    # integer; zero is normalized to one and the range is clipped.
     method eraseCharacters {{count 1}} {
         set count [my normalizeCount $count]
 
@@ -1364,6 +1468,9 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Insert count blank cells at the cursor, shifting the remainder of
+    # the row right and dropping cells beyond the right edge. count is a
+    # nonnegative integer; wide-glyph pairs are repaired after the shift.
     method insertCharacters {{count 1}} {
         set count [my normalizeCount $count]
         set count [expr {min($count, $cols - $cursorCol)}]
@@ -1398,6 +1505,9 @@ oo::class create ::LATerm::Screen {
     }
 
 
+    # Delete count cells at the cursor, shifting the remainder left and
+    # blanking the right edge. count is a nonnegative integer; wide-glyph
+    # pairs are repaired after the shift.
     method deleteCharacters {{count 1}} {
         set count [my normalizeCount $count]
         set count [expr {min($count, $cols - $cursorCol)}]
@@ -1420,6 +1530,8 @@ oo::class create ::LATerm::Screen {
         set wrapPending 0
     }
 
+    # Insert count blank lines at the cursor through the bottom scroll
+    # margin. count is a nonnegative integer; no-op outside the region.
     method insertLines {{count 1}} {
         set count [my normalizeCount $count]
 
@@ -1453,6 +1565,9 @@ oo::class create ::LATerm::Screen {
     }
 
     
+    # Delete count lines at the cursor through the bottom scroll margin,
+    # filling the vacated rows with blanks. count is a nonnegative integer;
+    # no-op outside the region.
     method deleteLines {{count 1}} {
         set count [my normalizeCount $count]
 

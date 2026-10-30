@@ -7,6 +7,9 @@ oo::class create ::LATerm::ResizeController {
     variable lastRows lastCols
     variable pending
 
+    # textWidget is the resizable Tk Text widget; screenObject is the
+    # Screen model; channel is the PTY channel to resize when dimensions
+    # change. Types: widget path, TclOO object command, and channel name.
     constructor {textWidget screenObject channel} {
         set widget $textWidget
         set screen $screenObject
@@ -28,6 +31,8 @@ oo::class create ::LATerm::ResizeController {
         bind $widget <Configure> [list [self] scheduleResize]
     }
 
+    # Debounce Configure events so a burst of geometry changes results
+    # in one resize after 50 ms. Tk callback; takes no arguments.
     method scheduleResize {} {
         if {$pending ne ""} {
             after cancel $pending
@@ -36,6 +41,9 @@ oo::class create ::LATerm::ResizeController {
         set pending [after 50 [list [self] applyResize]]
     }
 
+    # Recompute rows/columns from widget pixels and font cell metrics,
+    # then update the model and PTY only when dimensions have changed.
+    # Tk after callback; takes no arguments.
     method applyResize {} {
         set pending ""
 
@@ -73,4 +81,3 @@ oo::class create ::LATerm::ResizeController {
         }
     }
 }
-

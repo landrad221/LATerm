@@ -4,11 +4,16 @@ namespace eval ::LATerm {}
 oo::class create ::LATerm::ClipboardController {
     variable screen writer
 
+    # screenObject supplies bracketed-paste mode; writerObject accepts
+    # PTY bytes through its send method. Both are TclOO object commands.
     constructor {screenObject writerObject} {
         set screen $screenObject
         set writer $writerObject
     }
 
+    # Prepare clipboard text for the PTY. text is a Tcl string; bracketed
+    # paste delimiters are included when the screen has enabled that mode.
+    # Returns UTF-8 encoded bytes, or "" for empty text.
     method encodePaste {text} {
         if {$text eq ""} {
             return ""
@@ -21,6 +26,9 @@ oo::class create ::LATerm::ClipboardController {
         return [encoding convertto utf-8 $text]
     }
 
+    # Read the Tk clipboard associated with widget and queue it for PTY
+    # input. widget is a Tk widget path. Clipboard or write errors are
+    # reported to stderr; this event-handler method returns no value.
     method paste {widget} {
         if {[catch {
             clipboard get -displayof $widget
@@ -42,6 +50,8 @@ oo::class create ::LATerm::ClipboardController {
         }
     }
  
+    # Copy the Text widget's current selection to the Tk clipboard.
+    # widget is a Tk Text widget path. An absent/empty selection is a no-op.
     method copySelection {widget} {
         if {[catch {
             $widget get sel.first sel.last

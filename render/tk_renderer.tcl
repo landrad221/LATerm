@@ -10,6 +10,9 @@ oo::class create ::LATerm::TkRenderer {
     variable cursorOverlay
     variable profile
 
+    # textWidget is a Tk Text widget displaying the terminal; screenObject
+    # is the Screen model supplying dimensions, cells, cursor and dirtiness.
+    # The renderer configures the widget and performs its initial redraw.
     constructor {textWidget screenObject} {
         set widget $textWidget
         set screen $screenObject
@@ -41,11 +44,15 @@ oo::class create ::LATerm::TkRenderer {
     }
     
 
+    # Register an optional cursor overlay object. It must implement
+    # updatePosition; an empty value restores the Text-tag cursor.
     method setCursorOverlay {overlayObject} {
         set cursorOverlay $overlayObject
     }
 
-    # Convert one logical screen row into Tk text.
+    # Convert one zero-based screen row into its displayed Tcl string.
+    # Continuation cells for wide glyphs are omitted because the leading
+    # cell already contains the full character.
     method rowText {row} {
         lassign [$screen dimensions] rows cols
 
@@ -65,7 +72,9 @@ oo::class create ::LATerm::TkRenderer {
         return $output
     }
 
-    # Convert a terminal column into a Tk character index.
+    # Convert a zero-based terminal column to a zero-based Tk character
+    # offset within row. Wide glyphs contribute Tcl string length, not
+    # terminal-cell width, because Tk indexes characters rather than cells.
     method columnToIndex {row column} {
         lassign [$screen dimensions] rows cols
 
@@ -84,7 +93,8 @@ oo::class create ::LATerm::TkRenderer {
         return $index
     }
 
-    # Replace a single row in the Text widget.
+    # Replace a zero-based screen row with its plain text representation.
+    # row is an integer screen row; this helper does not apply style tags.
     method renderRow {row} {
         set line [expr {$row + 1}]
         set text [my rowText $row]
@@ -97,8 +107,8 @@ oo::class create ::LATerm::TkRenderer {
         $widget configure -state disabled
     }
 
-    # Full-screen redraw.
-    
+    # Rebuild all Text lines and styled runs after initial display or a
+    # dimension change. Also consumes accumulated dirty state.
     method render {} {
 
         lassign [$screen dimensions] rows cols
@@ -135,6 +145,9 @@ oo::class create ::LATerm::TkRenderer {
     }
 
 
+    # Render only dirty rows and cursor changes. A size mismatch falls back
+    # to render(); dirty metadata is consumed before drawing to avoid
+    # replaying stale changes on the next event-loop turn.
     method renderDirty {} {
         lassign [$screen dimensions] rows cols
         dict incr profile dirtyRenders
@@ -183,6 +196,9 @@ oo::class create ::LATerm::TkRenderer {
     }
 
 
+    # Synchronize Tk's insertion mark and block-tag cursor with Screen.
+    # A cursor on a wide-character continuation cell is snapped to its
+    # leading cell so the rendered index remains valid.
     method updateCursor {} {
         # Remove the previous cursor highlight.
         $widget tag remove latermCursor 1.0 end
@@ -224,8 +240,13 @@ oo::class create ::LATerm::TkRenderer {
         }
     }
 
+    # Return the Tk tag for a cell-attribute dictionary. attributes must
+    # contain fg/bg color strings (or "default") and boolean-like bold,
+    # italic, underline, and inverse values. Tags and font variants are
+    # cached so repeated cells with the same style do not recreate Tk state.
     method styleTag {attributes} {
-        # Normalize the attributes into a stable cache key.
+        # Normalize attributes into a stable cache key; visual defaults
+        # and inverse colors are resolved only when creating the tag.
         set key [list \
             [dict get $attributes fg] \
             [dict get $attributes bg] \
@@ -290,6 +311,9 @@ oo::class create ::LATerm::TkRenderer {
 
 
 
+    # Rebuild one zero-based row and apply a tag to each contiguous run
+    # of identical style. Tcl character offsets are tracked separately
+    # from terminal columns to account for wide and combining characters.
     method renderStyledRow {row} {
         lassign [$screen dimensions] rows cols
 
@@ -360,6 +384,8 @@ oo::class create ::LATerm::TkRenderer {
         }
     }
 
+    # Return the Tk Text index for the current cursor as "line.column".
+    # Tk line numbers are one-based; the character column is zero-based.
     method cursorIndex {} {
         lassign [$screen cursor] row col
 
@@ -374,10 +400,13 @@ oo::class create ::LATerm::TkRenderer {
         return "[expr {$row + 1}].$index"
     }
 
+    # Return profiling counters and accumulated microsecond timings as a
+    # dictionary. Values remain cumulative until resetStatistics is called.
     method statistics {} {
         return $profile
     }
 
+    # Clear render/profile counters without changing the displayed screen.
     method resetStatistics {} {
         set profile [dict create \
             fullRedraws 0 \
@@ -390,6 +419,7 @@ oo::class create ::LATerm::TkRenderer {
     }
 
 
+# Delete fonts created by this renderer when the object is destroyed.
 destructor {
     dict for {key fontName} $fontCache {
         catch {font delete $fontName}
@@ -397,4 +427,3 @@ destructor {
 }
 
 }
-

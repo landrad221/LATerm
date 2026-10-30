@@ -5,6 +5,9 @@ namespace eval ::LATerm {
 
 
 
+# Convert an #RRGGBB Tk color string to OSC's rgb:RRRR/GGGG/BBBB form.
+# hex is a six-digit hexadecimal color string; returns a protocol payload
+# without OSC framing. Invalid input raises an error.
 proc ::LATerm::hexToOscRgb {hex} {
     if {![regexp {
         ^#([0-9a-fA-F]{2})
@@ -26,12 +29,17 @@ proc ::LATerm::hexToOscRgb {hex} {
 oo::class create ::LATerm::ScreenAdapter {
     variable screen utf8Buffer responseCallback
 
+    # screenObject is the Screen model that receives terminal operations.
+    # responseHandler is an optional command prefix accepting one byte
+    # string to send back to the terminal (for device/status replies).
     constructor {screenObject {responseHandler {}}} {
         set screen $screenObject
         set utf8Buffer {}
         set responseCallback $responseHandler
     }
 
+    # Send a terminal response through responseCallback, if configured.
+    # data is a Tcl string containing response bytes.
     method respond {data} {
         if {$responseCallback eq ""} {
             return
@@ -41,6 +49,10 @@ oo::class create ::LATerm::ScreenAdapter {
 
     }       
 
+    # Translate one Parser callback into Screen operations.
+    # type is the event name (print, byte, control, escape, csi, osc);
+    # args are the event-specific payloads emitted by Parser. UTF-8 bytes
+    # are buffered across calls, but never across control-sequence events.
     method event {type args} {
         # A pending UTF-8 sequence must not cross a control
         # sequence boundary.
@@ -78,6 +90,8 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
 
+    # Replace any incomplete UTF-8 prefix with U+FFFD before a non-byte
+    # parser event is handled. No arguments or return value.
     method flushIncompleteUtf8 {} {
         if {[llength $utf8Buffer] > 0} {
             set utf8Buffer {}
@@ -85,6 +99,10 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
 
+    # Append one unsigned integer byte to the pending UTF-8 sequence.
+    # b must be a byte value (0..255). Complete characters are decoded
+    # and printable code points are passed to Screen.print; malformed
+    # sequences produce U+FFFD.
     method utf8Byte {b} {
         lappend utf8Buffer $b
 
@@ -138,6 +156,8 @@ oo::class create ::LATerm::ScreenAdapter {
 
     }
 
+    # Apply a named C0 control action emitted by Parser.
+    # name is a symbolic control name such as CR, LF, BS, or HT.
     method control {name} {
         switch -- $name {
             CR  { $screen cr }
@@ -153,6 +173,8 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
 
+    # Apply a supported single-character ESC command.
+    # sequence is the escape final character emitted by Parser.
     method escape {sequence} {
         switch -- $sequence {
 
@@ -170,6 +192,11 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
 
+    # Read a semicolon-separated CSI parameter list.
+    # values is a Tcl list of parameter strings; index is a zero-based
+    # integer; default is the integer returned for missing, empty, zero,
+    # or non-integer parameters. This matches terminal defaults where
+    # omitted/zero movement counts mean one unless a command overrides it.
     method parameter {values index {default 1}} {
         set value [lindex $values $index]
 
@@ -184,6 +211,10 @@ oo::class create ::LATerm::ScreenAdapter {
         return $value
     }
 
+    # Apply one CSI operation. params is the raw parameter string,
+    # intermediates contains CSI intermediate bytes, and final is the
+    # final command character. Coordinates from the screen are zero-based;
+    # CSI cursor positions are converted from one-based terminal values.
     method csi {params intermediates final} {
         if {[string index $params 0] eq "?" && $intermediates eq ""} {
             if {$final eq "h" || $final eq "l"} {
@@ -337,6 +368,8 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
     
+    # Resolve an ANSI 256-color palette index to #RRGGBB.
+    # index is an integer from 0 through 255; out-of-range values error.
     method ansiColor {index} {
         # Return an RGB hex string for an ANSI 256-color index.
         set basic {
@@ -374,13 +407,17 @@ oo::class create ::LATerm::ScreenAdapter {
             $gray $gray $gray]
     }
 
+    # Apply semicolon-separated Select Graphic Rendition attributes.
+    # params is the raw CSI parameter string (empty means reset, code 0).
+    # Unsupported or malformed fields are ignored rather than partially
+    # interpreted as colors.
     method sgr {params} {
         if {$params eq ""} {
             set params 0
         }
 
-        # This milestone supports semicolon-separated SGR.
-        # Colon-separated extended SGR will be added later.
+        # This implementation accepts semicolon-separated SGR fields;
+        # colon-form subparameters are ignored until explicitly supported.
         if {![regexp {^[0-9;]+$} $params]} {
             return
         }
@@ -487,6 +524,8 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
  
+    # Answer supported DSR requests: 5 (ready) and 6 (cursor position).
+    # params is the raw CSI parameter string.
     method deviceStatusReport {params} {
         switch -- $params {
             5 {
@@ -506,6 +545,8 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
 
+    # Answer a primary device-attributes request (empty or parameter 0).
+    # params is the raw CSI parameter string; secondary queries are ignored.
     method deviceAttributes {params} {
         # Respond to primary DA queries only.
         if {$params eq "" || $params eq "0"} {
@@ -513,6 +554,9 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
 
+    # Handle supported OSC queries. payload is the OSC body without its
+    # terminator; currently only default foreground/background queries
+    # are answered.
     method osc {payload} {
         
         switch -- $payload {
@@ -526,4 +570,3 @@ oo::class create ::LATerm::ScreenAdapter {
         }
     }
 }
-

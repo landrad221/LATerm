@@ -7,6 +7,9 @@ oo::class create ::LATerm::MouseController {
     variable widget screen encoder writer
     variable pressedButton lastPosition
 
+    # textWidget is the Tk Text widget; screenObject provides cell
+    # coordinates and tracking modes; mouseEncoder encodes terminal
+    # reports; writerObject queues reports to the PTY.
     constructor {textWidget screenObject mouseEncoder writerObject} {
         set widget $textWidget
         set screen $screenObject
@@ -17,10 +20,14 @@ oo::class create ::LATerm::MouseController {
         set lastPosition {}
     }
 
+    # Return whether the screen currently requests mouse reports.
     method reporting {} {
         return [$screen mouseReportingEnabled]
     }
 
+    # Translate widget-relative pixel coordinates into zero-based
+    # terminal row/column coordinates. x and y are integer Tk event
+    # coordinates; returns {row col}, or {} when outside the screen.
     method coordinates {x y} {
         # Convert a Tk Text index to a screen row and cell column.
         #
@@ -75,6 +82,10 @@ oo::class create ::LATerm::MouseController {
         return [list $row $col]
     }
 
+    # Encode and queue one event. kind is press/release/drag/move or a
+    # wheel direction; button is the Tk button number; x/y are event
+    # coordinates and state is Tk's integer modifier-state mask.
+    # Returns 1 when the event is consumed, or 0 when reporting is off.
     method send {kind button x y state} {
         if {![my reporting]} {
             return 0
@@ -106,6 +117,9 @@ oo::class create ::LATerm::MouseController {
         return 1
     }
 
+    # Handle a Tk button press. button is 1..3; x/y are widget pixels;
+    # state is the Tk modifier-state bitmask. Returns the event-consumed
+    # flag used by the application binding.
     method press {button x y state} {
         if {![my reporting]} {
             return 0
@@ -117,6 +131,7 @@ oo::class create ::LATerm::MouseController {
         return [my send press $button $x $y $state]
     }
 
+    # Handle a Tk button release; arguments have the same types as press.
     method release {button x y state} {
         if {![my reporting]} {
             return 0
@@ -128,6 +143,9 @@ oo::class create ::LATerm::MouseController {
         return [my send release $button $x $y $state]
     }
 
+    # Handle pointer motion using the current pressed button, if any.
+    # Repeated events for the same terminal cell are suppressed.
+    # x/y are widget pixels and state is the Tk modifier-state bitmask.
     method motion {x y state} {
         if {![my reporting]} {
             return 0
@@ -153,6 +171,8 @@ oo::class create ::LATerm::MouseController {
         return [my send move 0 $x $y $state]
     }
 
+    # Handle a wheel event. direction is wheel-up or wheel-down; x/y are
+    # widget pixels and state is the Tk modifier-state bitmask.
     method wheel {direction x y state} {
         if {![my reporting]} {
             return 0
