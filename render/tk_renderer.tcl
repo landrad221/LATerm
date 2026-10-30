@@ -99,295 +99,295 @@ oo::class create ::laterm::TkRenderer {
 
     # Full-screen redraw.
     
-method render {} {
+    method render {} {
 
-    lassign [$screen dimensions] rows cols
-    dict incr profile fullRedraws
+        lassign [$screen dimensions] rows cols
+        dict incr profile fullRedraws
 
-    # Rebuild the required number of Text lines.
-    set lines [lrepeat $rows ""]
+        # Rebuild the required number of Text lines.
+        set lines [lrepeat $rows ""]
 
-    $widget configure -state normal
-    $widget delete 1.0 end
-    $widget insert 1.0 [join $lines "\n"]
-    
-    try {
-        for {set row 0} {$row < $rows} {incr row} {
-            my renderStyledRow $row
-        }
-    } finally {
-        $widget configure -state disabled
-    }
-
-    set renderedRows $rows
-    set renderedCols $cols
-
-    $screen consumeDirty
-    my updateCursor
-
-    $widget tag raise sel
-
-    if {$cursorOverlay ne ""} {
-        $cursorOverlay updatePosition
-    } else {
-        $widget tag raise latermCursor
-    }
-}
-
-
-method renderDirty {} {
-    lassign [$screen dimensions] rows cols
-    dict incr profile dirtyRenders
-
-    # Resizing requires a full redraw.
-    if {$rows != $renderedRows || $cols != $renderedCols} {
-        my render
-        return
-    }
-
-    set changes [$screen consumeDirty]
-    set dirtyRows [dict get $changes rows]
-    set dirtyCount [dict size $dirtyRows]
-    set cursorChanged [dict get $changes cursor]
-
-    if {$dirtyCount == 0 && !$cursorChanged} {
-        return
-    }
-
-    if {$dirtyCount > 0} {
         $widget configure -state normal
-
+        $widget delete 1.0 end
+        $widget insert 1.0 [join $lines "\n"]
+    
         try {
-            foreach row [lsort -integer [dict keys $dirtyRows]] {
+            for {set row 0} {$row < $rows} {incr row} {
                 my renderStyledRow $row
             }
         } finally {
             $widget configure -state disabled
         }
-    }
 
-    if {$cursorChanged || $dirtyCount > 0} {
+        set renderedRows $rows
+        set renderedCols $cols
+
+        $screen consumeDirty
         my updateCursor
+
+        $widget tag raise sel
+
+        if {$cursorOverlay ne ""} {
+            $cursorOverlay updatePosition
+        } else {
+            $widget tag raise latermCursor
+        }
     }
 
-    if {$cursorOverlay ne ""} {
-        $cursorOverlay updatePosition
+
+    method renderDirty {} {
+        lassign [$screen dimensions] rows cols
+        dict incr profile dirtyRenders
+
+        # Resizing requires a full redraw.
+        if {$rows != $renderedRows || $cols != $renderedCols} {
+            my render
+            return
+        }
+
+        set changes [$screen consumeDirty]
+        set dirtyRows [dict get $changes rows]
+        set dirtyCount [dict size $dirtyRows]
+        set cursorChanged [dict get $changes cursor]
+
+        if {$dirtyCount == 0 && !$cursorChanged} {
+            return
+        }
+
+        if {$dirtyCount > 0} {
+            $widget configure -state normal
+
+            try {
+                foreach row [lsort -integer [dict keys $dirtyRows]] {
+                    my renderStyledRow $row
+                }
+            } finally {
+                $widget configure -state disabled
+            }
+        }
+
+        if {$cursorChanged || $dirtyCount > 0} {
+            my updateCursor
+        }
+
+        if {$cursorOverlay ne ""} {
+            $cursorOverlay updatePosition
+        }
+
+        $widget tag raise sel
+
+        if {$cursorOverlay eq ""} {
+            $widget tag raise latermCursor
+        }
+
     }
 
-    $widget tag raise sel
 
-    if {$cursorOverlay eq ""} {
-        $widget tag raise latermCursor
-    }
+    method updateCursor {} {
+        # Remove the previous cursor highlight.
+        $widget tag remove latermCursor 1.0 end
 
-}
+        if {![$screen cursorVisible]} {
+            return
+        }
 
+        lassign [$screen cursor] row col
+        lassign [$screen dimensions] rows cols
 
-method updateCursor {} {
-    # Remove the previous cursor highlight.
-    $widget tag remove latermCursor 1.0 end
+        if {$row < 0 || $row >= $rows ||
+            $col < 0 || $col >= $cols} {
+            return
+        }
 
-    if {![$screen cursorVisible]} {
-        return
-    }
-
-    lassign [$screen cursor] row col
-    lassign [$screen dimensions] rows cols
-
-    if {$row < 0 || $row >= $rows ||
-        $col < 0 || $col >= $cols} {
-        return
-    }
-
-    set cell [$screen cell $row $col]
-
-    # Handle wide-character continuation cells.
-    if {[dict get $cell width] == 0 && $col > 0} {
-        incr col -1
-    }
-
-    set line [expr {$row + 1}]
-    set index [my columnToIndex $row $col]
-
-    set start "$line.$index"
-    set end "$line.[expr {$index + 1}]"
-
-    # Keep the Tk insertion mark synchronized.
-    $widget mark set insert $start
-    $widget see $start
-
-    # Draw the legacy block cursor only when
-    # no overlay is registered.
-    if {$cursorOverlay eq ""} {
-        $widget tag add latermCursor $start $end
-        $widget tag raise latermCursor
-    }
-}
-
-method styleTag {attributes} {
-    # Normalize the attributes into a stable cache key.
-    set key [list \
-        [dict get $attributes fg] \
-        [dict get $attributes bg] \
-        [dict get $attributes bold] \
-        [dict get $attributes italic] \
-        [dict get $attributes underline] \
-        [dict get $attributes inverse]]
-
-    if {[dict exists $styleCache $key]} {
-        return [dict get $styleCache $key]
-    }
-
-    set fg [dict get $attributes fg]
-    set bg [dict get $attributes bg]
-
-    if {$fg eq "default"} {
-        set fg [$widget cget -foreground]
-    }
-    if {$bg eq "default"} {
-        set bg [$widget cget -background]
-    }
-
-    if {[dict get $attributes inverse]} {
-        set tmp $fg
-        set fg $bg
-        set bg $tmp
-    }
-
-    set bold [dict get $attributes bold]
-    set italic [dict get $attributes italic]
-
-    set fontKey [list $bold $italic]
-
-    if {![dict exists $fontCache $fontKey]} {
-        set base [$widget cget -font]
-
-        set fontName "latermFont_[string map {: _} [self]]_${bold}_${italic}"
-
-        font create $fontName \
-            -family [font actual $base -family] \
-            -size [font actual $base -size] \
-            -weight [expr {$bold ? "bold" : "normal"}] \
-            -slant [expr {$italic ? "italic" : "roman"}]
-
-        dict set fontCache $fontKey $fontName
-    }
-
-    set fontName [dict get $fontCache $fontKey]
-
-    set tag "latermStyle[incr styleCount]"
-
-    $widget tag configure $tag \
-        -foreground $fg \
-        -background $bg \
-        -font $fontName \
-        -underline [dict get $attributes underline]
-
-    dict set styleCache $key $tag
-
-    return $tag
-}
-
-
-
-method renderStyledRow {row} {
-    lassign [$screen dimensions] rows cols
-
-    set line [expr {$row + 1}]
-    set rowStart [clock microseconds]
-
-    set output ""
-    set previousStyle ""
-    set runStart 0
-    set textOffset 0
-    set runs {}
-
-    # Build the row and its style runs.
-    for {set col 0} {$col < $cols} {incr col} {
         set cell [$screen cell $row $col]
 
-        if {[dict get $cell width] == 0} {
-            continue
+        # Handle wide-character continuation cells.
+        if {[dict get $cell width] == 0 && $col > 0} {
+            incr col -1
         }
 
-        set style [my styleTag $cell]
-        set char [dict get $cell text]
+        set line [expr {$row + 1}]
+        set index [my columnToIndex $row $col]
 
-        if {$previousStyle ne "" &&
-            $style ne $previousStyle} {
+        set start "$line.$index"
+        set end "$line.[expr {$index + 1}]"
 
+        # Keep the Tk insertion mark synchronized.
+        $widget mark set insert $start
+        $widget see $start
+
+        # Draw the legacy block cursor only when
+        # no overlay is registered.
+        if {$cursorOverlay eq ""} {
+            $widget tag add latermCursor $start $end
+            $widget tag raise latermCursor
+        }
+    }
+
+    method styleTag {attributes} {
+        # Normalize the attributes into a stable cache key.
+        set key [list \
+            [dict get $attributes fg] \
+            [dict get $attributes bg] \
+            [dict get $attributes bold] \
+            [dict get $attributes italic] \
+            [dict get $attributes underline] \
+            [dict get $attributes inverse]]
+
+        if {[dict exists $styleCache $key]} {
+            return [dict get $styleCache $key]
+        }
+
+        set fg [dict get $attributes fg]
+        set bg [dict get $attributes bg]
+
+        if {$fg eq "default"} {
+            set fg [$widget cget -foreground]
+        }
+        if {$bg eq "default"} {
+            set bg [$widget cget -background]
+        }
+
+        if {[dict get $attributes inverse]} {
+            set tmp $fg
+            set fg $bg
+            set bg $tmp
+        }
+
+        set bold [dict get $attributes bold]
+        set italic [dict get $attributes italic]
+
+        set fontKey [list $bold $italic]
+
+        if {![dict exists $fontCache $fontKey]} {
+            set base [$widget cget -font]
+
+            set fontName "latermFont_[string map {: _} [self]]_${bold}_${italic}"
+
+            font create $fontName \
+                -family [font actual $base -family] \
+                -size [font actual $base -size] \
+                -weight [expr {$bold ? "bold" : "normal"}] \
+                -slant [expr {$italic ? "italic" : "roman"}]
+
+            dict set fontCache $fontKey $fontName
+        }
+
+        set fontName [dict get $fontCache $fontKey]
+
+        set tag "latermStyle[incr styleCount]"
+
+        $widget tag configure $tag \
+            -foreground $fg \
+            -background $bg \
+            -font $fontName \
+            -underline [dict get $attributes underline]
+
+        dict set styleCache $key $tag
+
+        return $tag
+    }
+
+
+
+    method renderStyledRow {row} {
+        lassign [$screen dimensions] rows cols
+
+        set line [expr {$row + 1}]
+        set rowStart [clock microseconds]
+
+        set output ""
+        set previousStyle ""
+        set runStart 0
+        set textOffset 0
+        set runs {}
+
+        # Build the row and its style runs.
+        for {set col 0} {$col < $cols} {incr col} {
+            set cell [$screen cell $row $col]
+
+            if {[dict get $cell width] == 0} {
+                continue
+            }
+
+            set style [my styleTag $cell]
+            set char [dict get $cell text]
+
+            if {$previousStyle ne "" &&
+                $style ne $previousStyle} {
+
+                lappend runs [list \
+                    $runStart $textOffset $previousStyle]
+
+                set runStart $textOffset
+            }
+
+            append output $char
+            incr textOffset [string length $char]
+            set previousStyle $style
+        }
+
+        if {$previousStyle ne ""} {
             lappend runs [list \
                 $runStart $textOffset $previousStyle]
-
-            set runStart $textOffset
         }
 
-        append output $char
-        incr textOffset [string length $char]
-        set previousStyle $style
+        set buildEnd [clock microseconds]
+
+        # Update the Tk Text widget.
+        $widget delete "$line.0" "$line.end"
+        $widget insert "$line.0" $output
+
+        foreach run $runs {
+            lassign $run start end tag
+
+            $widget tag add $tag \
+                "$line.$start" "$line.$end"
+        }
+
+        set rowEnd [clock microseconds]
+
+        # Record profiling data.
+        dict incr profile styledRows
+        dict incr profile styleRuns [llength $runs]
+        dict incr profile buildUs [expr {$buildEnd - $rowStart}]
+        dict incr profile tkUs [expr {$rowEnd - $buildEnd}]
+
+        set rowUs [expr {$rowEnd - $rowStart}]
+
+        if {$rowUs > [dict get $profile maxRowUs]} {
+            dict set profile maxRowUs $rowUs
+        }
     }
 
-    if {$previousStyle ne ""} {
-        lappend runs [list \
-            $runStart $textOffset $previousStyle]
+    method cursorIndex {} {
+        lassign [$screen cursor] row col
+
+        set cell [$screen cell $row $col]
+
+        if {[dict get $cell width] == 0 && $col > 0} {
+            incr col -1
+        }
+
+        set index [my columnToIndex $row $col]
+
+        return "[expr {$row + 1}].$index"
     }
 
-    set buildEnd [clock microseconds]
-
-    # Update the Tk Text widget.
-    $widget delete "$line.0" "$line.end"
-    $widget insert "$line.0" $output
-
-    foreach run $runs {
-        lassign $run start end tag
-
-        $widget tag add $tag \
-            "$line.$start" "$line.$end"
+    method statistics {} {
+        return $profile
     }
 
-    set rowEnd [clock microseconds]
-
-    # Record profiling data.
-    dict incr profile styledRows
-    dict incr profile styleRuns [llength $runs]
-    dict incr profile buildUs [expr {$buildEnd - $rowStart}]
-    dict incr profile tkUs [expr {$rowEnd - $buildEnd}]
-
-    set rowUs [expr {$rowEnd - $rowStart}]
-
-    if {$rowUs > [dict get $profile maxRowUs]} {
-        dict set profile maxRowUs $rowUs
+    method resetStatistics {} {
+        set profile [dict create \
+            fullRedraws 0 \
+            dirtyRenders 0 \
+            styledRows 0 \
+            styleRuns 0 \
+            buildUs 0 \
+            tkUs 0 \
+            maxRowUs 0]
     }
-}
-
-method cursorIndex {} {
-    lassign [$screen cursor] row col
-
-    set cell [$screen cell $row $col]
-
-    if {[dict get $cell width] == 0 && $col > 0} {
-        incr col -1
-    }
-
-    set index [my columnToIndex $row $col]
-
-    return "[expr {$row + 1}].$index"
-}
-
-method statistics {} {
-    return $profile
-}
-
-method resetStatistics {} {
-    set profile [dict create \
-        fullRedraws 0 \
-        dirtyRenders 0 \
-        styledRows 0 \
-        styleRuns 0 \
-        buildUs 0 \
-        tkUs 0 \
-        maxRowUs 0]
-}
 
 
 destructor {
