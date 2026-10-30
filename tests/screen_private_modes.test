@@ -1,0 +1,139 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+source [file join \
+    [file dirname [info script]] .. "render/screen.tcl"]
+
+test screen-private-modes-001 {?47 preserves alternate content} -body {
+    set s [::laterm::Screen new 2 8]
+
+    $s setPrivateMode 47 1
+    $s print "EDITOR"
+    $s setPrivateMode 47 0
+    $s setPrivateMode 47 1
+
+    set result [$s dump]
+
+    $s destroy
+    set result
+} -result "EDITOR  \n        "
+
+test screen-private-modes-002 {?1047 clears alternate on exit} -body {
+    set s [::laterm::Screen new 2 8]
+
+    $s setPrivateMode 1047 1
+    $s print "EDITOR"
+    $s setPrivateMode 1047 0
+    $s setPrivateMode 47 1
+
+    set result [$s dump]
+
+    $s destroy
+    set result
+} -result "        \n        "
+
+test screen-private-modes-003 {?1048 saves and restores cursor} -body {
+    set s [::laterm::Screen new 4 10]
+
+    $s moveCursor 2 7
+    $s setPrivateMode 1048 1
+    $s moveCursor 0 0
+    $s setPrivateMode 1048 0
+
+    set result [$s cursor]
+
+    $s destroy
+    set result
+} -result {2 7}
+
+test screen-private-modes-004 {?1049 restores primary screen} -body {
+    set s [::laterm::Screen new 3 10]
+
+    $s print "SHELL"
+    $s moveCursor 1 5
+
+    $s setPrivateMode 1049 1
+    $s print "EDITOR"
+
+    $s setPrivateMode 1049 0
+
+    set result [list \
+        [$s activeScreen] \
+        [$s cursor] \
+        [$s dump]]
+
+    $s destroy
+    set result
+} -result [list primary {1 5} "SHELL     \n          \n          "]
+
+test screen-private-modes-005 {?1049 starts with blank alternate} -body {
+    set s [::laterm::Screen new 2 8]
+
+    $s setPrivateMode 47 1
+    $s print "OLD"
+    $s setPrivateMode 47 0
+
+    $s setPrivateMode 1049 1
+
+    set result [$s dump]
+
+    $s destroy
+    set result
+} -result "        \n        "
+
+test screen-private-modes-006 {repeated ?1049 enable is safe} -body {
+    set s [::laterm::Screen new 3 10]
+
+    $s moveCursor 2 6
+
+    $s setPrivateMode 1049 1
+    $s moveCursor 0 2
+    $s setPrivateMode 1049 1
+    $s setPrivateMode 1049 0
+
+    set result [$s cursor]
+
+    $s destroy
+    set result
+} -result {2 6}
+
+test screen-private-modes-007 {alternate operations do not change history} -body {
+    set s [::laterm::Screen new 2 5 10]
+
+    $s setPrivateMode 1049 1
+    $s print "AAAAABBBBB"
+    $s scrollUp 2
+    $s setPrivateMode 1049 0
+
+    set result [$s scrollbackSize]
+
+    $s destroy
+    set result
+} -result 0
+
+test screen-private-modes-008 {buffer switching invalidates visible grid} -body {
+    set s [::laterm::Screen new 2 4]
+
+    $s consumeDirty
+    $s setPrivateMode 1049 1
+
+    set result [dict get [$s consumeDirty] rows]
+
+    $s destroy
+    set result
+} -result {0 {{0 3}} 1 {{0 3}}}
+
+test screen-private-modes-009 {unknown private mode is ignored} -body {
+    set s [::laterm::Screen new 2 5]
+
+    $s setPrivateMode 9999 1
+
+    set result [$s activeScreen]
+
+    $s destroy
+    set result
+} -result primary
+
+::tcltest::cleanupTests
+

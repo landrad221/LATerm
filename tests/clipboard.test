@@ -1,0 +1,243 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+
+source [file join $root render/screen.tcl]
+source [file join $root parser.tcl]
+source [file join $root render/screen_adapter.tcl]
+source [file join $root clipboard_controller.tcl]
+
+oo::class create ::ClipboardMockWriter {
+    variable messages
+
+    constructor {} {
+        set messages {}
+    }
+
+    method send {bytes} {
+        lappend messages $bytes
+    }
+
+    method messages {} {
+        return $messages
+    }
+}
+
+proc clipboardPipeline {} {
+    set s [::laterm::Screen new 5 20]
+    set a [::LATerm::ScreenAdapter new $s]
+    set p [::LATerm::Parser new [list $a event]]
+
+    set w [::ClipboardMockWriter new]
+    set c [::LATerm::ClipboardController new $s $w]
+
+    return [list $s $a $p $c $w]
+}
+
+proc clipboardCleanup {objects} {
+    foreach obj [lreverse $objects] {
+        $obj destroy
+    }
+}
+
+test clipboard-001 {bracketed paste initially disabled} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    set result [$s bracketedPaste]
+
+    clipboardCleanup $objects
+    set result
+} -result 0
+
+test clipboard-002 {enable bracketed paste via CSI} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    $p feed "\033\[?2004h"
+    set result [$s bracketedPaste]
+
+    clipboardCleanup $objects
+    set result
+} -result 1
+
+test clipboard-003 {disable bracketed paste via CSI} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    $p feed "\033\[?2004h"
+    $p feed "\033\[?2004l"
+
+    set result [$s bracketedPaste]
+
+    clipboardCleanup $objects
+    set result
+} -result 0
+
+test clipboard-004 {ordinary paste} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    set result [binary encode hex [$c encodePaste "hello"]]
+
+    clipboardCleanup $objects
+    set result
+} -result 68656c6c6f
+
+test clipboard-005 {bracketed paste delimiters} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    $s setBracketedPaste 1
+    set result [binary encode hex [$c encodePaste "hello"]]
+
+    clipboardCleanup $objects
+    set result
+} -result 1b5b3230307e68656c6c6f1b5b3230317e
+
+test clipboard-006 {multiline paste} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    $s setBracketedPaste 1
+    set result [$c encodePaste "first\nsecond"]
+
+    clipboardCleanup $objects
+    set result
+} -result "\033\[200~first\nsecond\033\[201~"
+
+test clipboard-007 {UTF-8 paste} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    set result [binary encode hex [$c encodePaste "é中"]]
+
+    clipboardCleanup $objects
+    set result
+} -result c3a9e4b8ad
+
+test clipboard-008 {empty paste produces no bytes} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    $s setBracketedPaste 1
+    set result [$c encodePaste ""]
+
+    clipboardCleanup $objects
+    set result
+} -result {}
+
+test clipboard-009 {bracketed paste does not modify screen} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    $p feed "HELLO"
+    set before [$s dump]
+
+    $p feed "\033\[?2004h"
+    $c encodePaste "world"
+
+    set result [expr {$before eq [$s dump]}]
+
+    clipboardCleanup $objects
+    set result
+} -result 1
+
+test clipboard-010 {ordinary paste sent to writer} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    set writer [::ClipboardMockWriter new]
+
+    set bytes [$c encodePaste "hello"]
+    $writer send $bytes
+
+    set result [binary encode hex \
+        [lindex [$writer messages] 0]]
+
+    $writer destroy
+    clipboardCleanup $objects
+
+    set result
+} -result 68656c6c6f
+
+test clipboard-011 {bracketed paste sent as one message} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    $p feed "\033\[?2004h"
+
+    set writer [::ClipboardMockWriter new]
+
+    $writer send [$c encodePaste "hello"]
+
+    set messages [$writer messages]
+
+    set result [list \
+        [llength $messages] \
+        [binary encode hex [lindex $messages 0]]]
+
+    $writer destroy
+    clipboardCleanup $objects
+
+    set result
+} -result {1 1b5b3230307e68656c6c6f1b5b3230317e}
+
+test clipboard-012 {UTF-8 bytes preserved by writer} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    set writer [::ClipboardMockWriter new]
+
+    $writer send [$c encodePaste "é中"]
+
+    set result [binary encode hex \
+        [lindex [$writer messages] 0]]
+
+    $writer destroy
+    clipboardCleanup $objects
+
+    set result
+} -result c3a9e4b8ad
+
+test clipboard-013 {multiple pastes preserve order} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    set writer [::ClipboardMockWriter new]
+
+    foreach text {first second third} {
+        $writer send [$c encodePaste $text]
+    }
+
+    set result [$writer messages]
+
+    $writer destroy
+    clipboardCleanup $objects
+
+    set result
+} -result {first second third}
+
+test clipboard-014 {empty paste is not submitted} -body {
+    set objects [clipboardPipeline]
+    lassign $objects s a p c
+
+    set writer [::ClipboardMockWriter new]
+
+    set bytes [$c encodePaste ""]
+
+    if {$bytes ne ""} {
+        $writer send $bytes
+    }
+
+    set result [llength [$writer messages]]
+
+    $writer destroy
+    clipboardCleanup $objects
+
+    set result
+} -result 0
+
+::tcltest::cleanupTests

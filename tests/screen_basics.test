@@ -1,0 +1,71 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+source [file join \
+    [file dirname [info script]] .. "render/screen.tcl"]
+
+test screen-basics-001 {dimensions and blank grid} -body {
+    set s [::laterm::Screen new 2 3]
+    set result [list [$s dimensions] [$s dump]]
+    $s destroy
+    set result
+} -result [list {2 3} "   \n   "]
+
+test screen-basics-002 {printing and cursor position} -body {
+    set s [::laterm::Screen new 2 4]
+    $s print "AB"
+    set result [list [$s dump] [$s cursor]]
+    $s destroy
+    set result
+} -result [list "AB  \n    " {0 2}]
+
+test screen-basics-003 {delayed wrap} -body {
+    set s [::laterm::Screen new 2 3]
+    $s print "ABC"
+    set before [list [$s cursor] [$s pendingWrap]]
+    $s print "D"
+    set result [list $before [$s cursor] [$s dump]]
+    $s destroy
+    set result
+} -result [list {{0 2} 1} {1 1} "ABC\nD  "]
+
+test screen-basics-004 {cursor move cancels pending wrap} -body {
+    set s [::laterm::Screen new 2 2]
+    $s print "AB"
+    $s moveCursor 0 0
+    $s print "X"
+    set result [list [$s dump] [$s pendingWrap]]
+    $s destroy
+    set result
+} -result [list "XB\n  " 0]
+
+test screen-basics-005 {cell attributes} -body {
+    set s [::laterm::Screen new 1 2]
+    $s print A
+    set result [list \
+        [dict get [$s cell 0 0] text] \
+        [dict get [$s cell 0 0] fg] \
+        [dict get [$s cell 0 0] width]]
+    $s destroy
+    set result
+} -result {A default 1}
+
+test screen-basics-006 {out-of-bounds rejection} -body {
+    set s [::laterm::Screen new 1 2]
+    set rc [catch {$s moveCursor 2 0} msg]
+    $s destroy
+    list $rc $msg
+} -result {1 {cell position out of range: 2,0}}
+
+test screen-basics-007 {empty print preserves pending wrap} -body {
+    set s [::laterm::Screen new 1 2]
+    $s print AB
+    $s print ""
+    set result [list [$s pendingWrap] [$s dump]]
+    $s destroy
+    set result
+} -result [list 1 AB]
+
+::tcltest::cleanupTests
+

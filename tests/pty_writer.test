@@ -1,0 +1,364 @@
+
+package require Tcl 8.6
+package require tcltest 2
+
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+source [file join $root pty_writer.tcl]
+
+# Create a simulated PTY transport using a Tcl pipe.
+proc writerPipeline {{limit 1048576}} {
+    lassign [chan pipe] reader sender
+
+    fconfigure $reader \
+        -blocking 0 \
+        -translation binary \
+        -encoding binary
+
+    fconfigure $sender \
+        -blocking 0 \
+        -translation binary \
+        -encoding binary \
+        -buffering none
+
+    set writer [::LATerm::PtyWriter new $sender $limit]
+
+    return [list $reader $sender $writer]
+}
+
+proc writerCleanup {objects} {
+    lassign $objects reader sender writer
+
+    catch {$writer destroy}
+    catch {close $sender}
+    catch {close $reader}
+}
+
+# Run idle callbacks and collect available bytes.
+proc writerRead {reader} {
+    set result ""
+
+    for {set i 0} {$i < 100} {incr i} {
+        update idletasks
+
+        set chunk [read $reader]
+
+        if {$chunk ne ""} {
+            append result $chunk
+        }
+
+        # Allow queued idle callbacks to execute.
+        if {$chunk eq ""} {
+            break
+        }
+    }
+
+    return $result
+}
+
+
+test pty-writer-001 {writer starts open} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    set result [$writer isClosed]
+
+    writerCleanup $objects
+    set result
+} -result 0
+
+test pty-writer-002 {send ordinary ASCII bytes} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send "hello"
+
+    set result [writerRead $reader]
+
+    writerCleanup $objects
+    set result
+} -result hello
+
+test pty-writer-003 {multiple sends preserve FIFO order} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send "first"
+    $writer send "second"
+    $writer send "third"
+
+    set result [writerRead $reader]
+
+    writerCleanup $objects
+    set result
+} -result firstsecondthird
+
+test pty-writer-004 {UTF-8 bytes preserved} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    set bytes [encoding convertto utf-8 "é中"]
+
+    $writer send $bytes
+
+    set result [binary encode hex [writerRead $reader]]
+
+    writerCleanup $objects
+    set result
+} -result c3a9e4b8ad
+
+test pty-writer-005 {binary data including NUL} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    set bytes [binary format H* "001b5b410aff"]
+
+    $writer send $bytes
+
+    set result [binary encode hex [writerRead $reader]]
+
+    writerCleanup $objects
+    set result
+} -result 001b5b410aff
+
+test pty-writer-006 {empty sends produce no output} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send ""
+
+    set result [list \
+        [$writer pending] \
+        [writerRead $reader]]
+
+    writerCleanup $objects
+    set result
+} -result {0 {}}
+
+test pty-writer-007 {pending reports queued bytes} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send "hello"
+    $writer send "world"
+
+    # No event loop iteration yet: data remains queued.
+    set result [$writer pending]
+
+    writerCleanup $objects
+    set result
+} -result 10
+
+test pty-writer-008 {queue drains on idle} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send "hello"
+
+    set before [$writer pending]
+
+    set received [writerRead $reader]
+    set after [$writer pending]
+
+    set result [list $before $received $after]
+
+    writerCleanup $objects
+    set result
+} -result {5 hello 0}
+
+test pty-writer-009 {pending limit rejects oversized send} -body {
+    set objects [writerPipeline 5]
+    lassign $objects reader sender writer
+
+    set failed [catch {
+        $writer send "123456"
+    } message]
+
+    set result [list $failed $message [$writer pending]]
+
+    writerCleanup $objects
+    set result
+} -result {1 {PTY writer pending limit exceeded} 0}
+
+test pty-writer-010 {rejected send preserves existing queue} -body {
+    set objects [writerPipeline 5]
+    lassign $objects reader sender writer
+
+    $writer send "abc"
+
+    set failed [catch {
+        $writer send "def"
+    }]
+
+    set pending [$writer pending]
+    set received [writerRead $reader]
+
+    set result [list $failed $pending $received]
+
+    writerCleanup $objects
+    set result
+} -result {1 3 abc}
+
+test pty-writer-011 {close prevents new writes} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer close
+
+    set failed [catch {
+        $writer send "hello"
+    } message]
+
+    set result [list [$writer isClosed] $failed $message]
+
+    writerCleanup $objects
+    set result
+} -result {1 1 {PTY writer is closed}}
+
+test pty-writer-012 {close clears queued data} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send "hello"
+    $writer close
+
+    set result [list \
+        [$writer isClosed] \
+        [$writer pending] \
+        [writerRead $reader]]
+
+    writerCleanup $objects
+    set result
+} -result {1 0 {}}
+
+test pty-writer-013 {close is idempotent} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer close
+
+    set failed [catch {
+        $writer close
+        $writer close
+    }]
+
+    set result [list $failed [$writer isClosed]]
+
+    writerCleanup $objects
+    set result
+} -result {0 1}
+
+test pty-writer-014 {send after drain works} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send "first"
+    set first [writerRead $reader]
+
+    $writer send "second"
+    set second [writerRead $reader]
+
+    set result [list $first $second]
+
+    writerCleanup $objects
+    set result
+} -result {first second}
+
+test pty-writer-015 {destroy cancels pending idle callback} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send "hello"
+
+    # Destroy before the idle callback runs.
+    $writer destroy
+
+    # Must not execute a callback referencing the dead object.
+    set failed [catch {
+        update idletasks
+    } message]
+
+    catch {close $sender}
+    catch {close $reader}
+
+    set failed
+} -result 0
+
+
+
+test pty-writer-016 {large payload preserves bytes} -body {
+    set objects [writerPipeline 262144]
+    lassign $objects reader sender writer
+
+    set payload [string repeat "A" 32768]
+    $writer send $payload
+
+    set received ""
+
+    for {set i 0} {$i < 1000} {incr i} {
+        update
+        append received [read $reader]
+
+        if {[string length $received] == 32768} {
+            break
+        }
+    }
+
+    set result [list \
+        [string length $received] \
+        [expr {$received eq $payload}]]
+
+    writerCleanup $objects
+    set result
+} -result {32768 1}
+
+test pty-writer-017 {large binary payload preserves bytes} -body {
+    set objects [writerPipeline 262144]
+    lassign $objects reader sender writer
+
+    set pattern [binary format H* "00ff1b5b41"]
+    set payload [string repeat $pattern 4096]
+
+    $writer send $payload
+
+    set received ""
+
+    for {set i 0} {$i < 1000} {incr i} {
+        update
+        append received [read $reader]
+
+        if {[string bytelength $received] ==
+            [string bytelength $payload]} {
+            break
+        }
+    }
+
+    set result [expr {
+        [binary encode hex $received] eq
+        [binary encode hex $payload]
+    }]
+
+    writerCleanup $objects
+    set result
+} -result 1
+
+test pty-writer-018 {close unregisters writable callback} -body {
+    set objects [writerPipeline]
+    lassign $objects reader sender writer
+
+    $writer send [string repeat "X" 65536]
+
+    update idletasks
+
+    $writer close
+
+    set callback [fileevent $sender writable]
+
+    writerCleanup $objects
+
+    set callback
+} -result {}
+
+
+::tcltest::cleanupTests

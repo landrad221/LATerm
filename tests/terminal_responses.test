@@ -1,0 +1,120 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+
+source [file join $root render/screen.tcl]
+source [file join $root parser.tcl]
+source [file join $root render/screen_adapter.tcl]
+
+namespace eval ::terminalResponses {
+    variable received {}
+}
+
+proc ::terminalResponses::capture {data} {
+    variable received
+    lappend received $data
+}
+
+proc ::terminalResponses::pipeline {} {
+    variable received
+    set received {}
+
+    set s [::laterm::Screen new 5 20]
+    set a [::LATerm::ScreenAdapter new \
+        $s ::terminalResponses::capture]
+    set p [::LATerm::Parser new [list $a event]]
+
+    return [list $s $a $p]
+}
+
+proc ::terminalResponses::cleanup {objects} {
+    foreach obj [lreverse $objects] {
+        $obj destroy
+    }
+}
+
+test terminal-responses-001 {device status report} -body {
+    set objects [::terminalResponses::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[5n"
+
+    set result $::terminalResponses::received
+
+    ::terminalResponses::cleanup $objects
+    set result
+} -result [list "\033\[0n"]
+
+test terminal-responses-002 {cursor position report} -body {
+    set objects [::terminalResponses::pipeline]
+    lassign $objects s a p
+
+    $s moveCursor 2 7
+    $p feed "\033\[6n"
+
+    set result $::terminalResponses::received
+
+    ::terminalResponses::cleanup $objects
+    set result
+} -result [list "\033\[3;8R"]
+
+test terminal-responses-003 {primary device attributes} -body {
+    set objects [::terminalResponses::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[c"
+
+    set result $::terminalResponses::received
+
+    ::terminalResponses::cleanup $objects
+    set result
+} -result [list "\033\[?1;2c"]
+
+test terminal-responses-004 {unsupported DSR produces no response} -body {
+    set objects [::terminalResponses::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[99n"
+
+    set result $::terminalResponses::received
+
+    ::terminalResponses::cleanup $objects
+    set result
+} -result {}
+
+test terminal-responses-005 {queries do not alter screen contents} -body {
+    set objects [::terminalResponses::pipeline]
+    lassign $objects s a p
+
+    $p feed "HELLO"
+    set before [$s dump]
+
+    $p feed "\033\[5n"
+    $p feed "\033\[6n"
+    $p feed "\033\[c"
+
+    set result [expr {$before eq [$s dump]}]
+
+    ::terminalResponses::cleanup $objects
+    set result
+} -result 1
+
+test terminal-responses-006 {optional response callback} -body {
+    set s [::laterm::Screen new 2 10]
+    set a [::LATerm::ScreenAdapter new $s]
+    set p [::LATerm::Parser new [list $a event]]
+
+    set result [catch {
+        $p feed "\033\[5n"
+    } errorMessage]
+
+    $p destroy
+    $a destroy
+    $s destroy
+
+    set result
+} -result 0
+
+::tcltest::cleanupTests

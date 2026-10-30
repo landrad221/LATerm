@@ -1,0 +1,263 @@
+
+package require Tcl 8.6
+package require tcltest 2
+namespace import ::tcltest::test
+
+set root [file dirname [file dirname [info script]]]
+
+source [file join $root render/screen.tcl]
+source [file join $root parser.tcl]
+source [file join $root render/screen_adapter.tcl]
+source [file join $root focus_controller.tcl]
+
+namespace eval ::vtRegression {
+    variable replies {}
+    variable events {}
+}
+
+proc ::vtRegression::captureReply {data} {
+    variable replies
+    lappend replies $data
+}
+
+proc ::vtRegression::captureEvent {args} {
+    variable events
+    lappend events $args
+}
+
+proc ::vtRegression::pipeline {} {
+    variable replies
+    set replies {}
+
+    set screen [::laterm::Screen new 5 20]
+    set adapter [::LATerm::ScreenAdapter new \
+        $screen ::vtRegression::captureReply]
+    set parser [::LATerm::Parser new \
+        [list $adapter event]]
+
+    return [list $screen $adapter $parser]
+}
+
+proc ::vtRegression::cleanup {objects} {
+    foreach obj [lreverse $objects] {
+        catch {$obj destroy}
+    }
+}
+
+# DCS: no payload should appear on the screen.
+test vt-regressions-001 {DCS does not leak text} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033Psecret\033\\"
+    $p feed "OK"
+
+    set result [list \
+        [dict get [$s cell 0 0] text] \
+        [dict get [$s cell 0 1] text]]
+
+    ::vtRegression::cleanup $objects
+    set result
+} -result {O K}
+
+test vt-regressions-002 {DCS terminator across feeds} -body {
+    set ::vtRegression::events {}
+    set p [::LATerm::Parser new ::vtRegression::captureEvent]
+
+    $p feed "\033Pabc\033"
+    $p feed "\\"
+
+    set result $::vtRegression::events
+    $p destroy
+    set result
+} -result {{dcs abc}}
+
+test vt-regressions-003 {DCS cancellation with CAN} -body {
+    set ::vtRegression::events {}
+    set p [::LATerm::Parser new ::vtRegression::captureEvent]
+
+    $p feed "\033Pdiscard\030"
+    $p feed "X"
+
+    set result [list [$p state] $::vtRegression::events]
+    $p destroy
+    set result
+} -result {GROUND {{print X}}}
+
+# Device attributes.
+test vt-regressions-004 {secondary device attributes} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[>c"
+
+    set result $::vtRegression::replies
+    ::vtRegression::cleanup $objects
+    set result
+} -result [list "\033\[>0;0;0c"]
+
+test vt-regressions-005 {primary device attributes} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[c"
+
+    set result $::vtRegression::replies
+    ::vtRegression::cleanup $objects
+    set result
+} -result [list "\033\[?1;2c"]
+
+# OSC color queries.
+test vt-regressions-006 {OSC 10 foreground query} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]10;?\007"
+
+    set result $::vtRegression::replies
+    ::vtRegression::cleanup $objects
+    set result
+} -result [list "\033]10;rgb:e5e5/e7e7/ebeb\007"]
+
+test vt-regressions-007 {OSC 11 background query} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]11;?\007"
+
+    set result $::vtRegression::replies
+    ::vtRegression::cleanup $objects
+    set result
+} -result [list "\033]11;rgb:1111/1818/2727\007"]
+
+test vt-regressions-008 {OSC query terminated by ST} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]10;?\033\\"
+
+    set result [llength $::vtRegression::replies]
+    ::vtRegression::cleanup $objects
+    set result
+} -result 1
+
+test vt-regressions-009 {OSC ST terminator across feeds} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033]10;?\033"
+    $p feed "\\"
+
+    set result [llength $::vtRegression::replies]
+
+    ::vtRegression::cleanup $objects
+    set result
+} -result 1
+
+# Focus reporting.
+test vt-regressions-010 {DECSET and DECRST 1004} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[?1004h"
+    set enabled [$s focusReporting]
+
+    $p feed "\033\[?1004l"
+    set disabled [$s focusReporting]
+
+    ::vtRegression::cleanup $objects
+    list $enabled $disabled
+} -result {1 0}
+
+# Cursor styles.
+test vt-regressions-011 {DECSCUSR steady block} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[2 q"
+
+    set result [list \
+        [$s cursorStyle] \
+        [$s cursorShape] \
+        [$s cursorBlinking]]
+
+    ::vtRegression::cleanup $objects
+    set result
+} -result {2 block 0}
+
+test vt-regressions-012 {DECSCUSR blinking bar} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[5 q"
+
+    set result [list \
+        [$s cursorStyle] \
+        [$s cursorShape] \
+        [$s cursorBlinking]]
+
+    ::vtRegression::cleanup $objects
+    set result
+} -result {5 bar 1}
+
+test vt-regressions-013 {invalid cursor style ignored} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[4 q"
+    $p feed "\033\[9 q"
+
+    set result [$s cursorStyle]
+    ::vtRegression::cleanup $objects
+    set result
+} -result 4
+
+# Cursor visibility.
+test vt-regressions-014 {DECTCEM hide and show} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033\[?25l"
+    set hidden [$s cursorVisible]
+
+    $p feed "\033\[?25h"
+    set visible [$s cursorVisible]
+
+    ::vtRegression::cleanup $objects
+    list $hidden $visible
+} -result {0 1}
+
+# Interleaved terminal operations.
+test vt-regressions-015 {control sequences do not leak} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "A"
+    $p feed "\033Pprivate\033\\"
+    $p feed "\033]10;?\007"
+    $p feed "\033\[6 q"
+    $p feed "B"
+
+    set result [list \
+        [dict get [$s cell 0 0] text] \
+        [dict get [$s cell 0 1] text] \
+        [$s cursorStyle]]
+
+    ::vtRegression::cleanup $objects
+    set result
+} -result {A B 6}
+
+test vt-regressions-016 {parser returns to ground state} -body {
+    set objects [::vtRegression::pipeline]
+    lassign $objects s a p
+
+    $p feed "\033Pdata\033\\"
+    $p feed "\033]11;?\007"
+    $p feed "\033\[?1004h"
+
+    set result [$p state]
+    ::vtRegression::cleanup $objects
+    set result
+} -result GROUND
+
+::tcltest::cleanupTests

@@ -1,0 +1,112 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+source [file join \
+    [file dirname [info script]] .. render/screen.tcl]
+
+test screen-wide-editing-001 {erase wide leading cell} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "A中BC"
+    $s moveCursor 0 1
+    $s eraseCharacters 1
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "A  BC " 1]
+
+test screen-wide-editing-002 {erase continuation cell} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "A中BC"
+    $s moveCursor 0 2
+    $s eraseCharacters 1
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "A  BC " 1]
+
+test screen-wide-editing-003 {insert before wide glyph} -body {
+    set s [::laterm::Screen new 1 7]
+    $s print "A中BC"
+    $s moveCursor 0 1
+    $s insertCharacters 1
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "A 中·BC " 1]
+
+test screen-wide-editing-004 {insert into continuation cell} -body {
+    set s [::laterm::Screen new 1 7]
+    $s print "A中BC"
+    $s moveCursor 0 2
+    $s insertCharacters 1
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "A   BC " 1]
+
+test screen-wide-editing-005 {delete wide leading cell} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "A中BC"
+    $s moveCursor 0 1
+    $s deleteCharacters 1
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "A BC  " 1]
+
+test screen-wide-editing-006 {delete continuation cell} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "A中BC"
+    $s moveCursor 0 2
+    $s deleteCharacters 1
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "A BC  " 1]
+
+test screen-wide-editing-007 {truncate wide glyph at right edge} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "ABC中"
+    $s moveCursor 0 0
+    $s insertCharacters 1
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+    } -result [list " ABC中·" 1]
+
+test screen-wide-editing-008 {erase entire line} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "A中BC"
+    $s eraseInLine 2
+
+    set result [list [$s dumpCells] [$s validateScreen]]
+    $s destroy
+    set result
+} -result [list "      " 1]
+
+
+test screen-wide-editing-009 {wide glyph truncated by insertion} -body {
+    set s [::laterm::Screen new 1 6]
+    $s print "ABCD中"
+    $s moveCursor 0 0
+    $s insertCharacters 1
+
+    set result [list \
+        [$s dumpCells] \
+        [$s validateScreen]]
+
+    $s destroy
+    set result
+} -result [list " ABCD " 1]
+
+
+::tcltest::cleanupTests
+

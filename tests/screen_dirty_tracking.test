@@ -1,0 +1,89 @@
+
+package require tcltest 2
+namespace import ::tcltest::test
+
+source [file join \
+    [file dirname [info script]] .. "render/screen.tcl"]
+
+test screen-dirty-tracking-001 {initial screen fully dirty} -body {
+    set s [::laterm::Screen new 2 4]
+    set changes [$s consumeDirty]
+    $s destroy
+    dict get $changes rows
+} -result {0 {{0 3}} 1 {{0 3}}}
+
+test screen-dirty-tracking-002 {printing marks changed cells} -body {
+    set s [::laterm::Screen new 2 5]
+    $s consumeDirty
+
+    $s print "ABC"
+    set changes [$s consumeDirty]
+    $s destroy
+
+    dict get $changes rows
+} -result {0 {{0 2}}}
+
+test screen-dirty-tracking-003 {consuming clears dirty state} -body {
+    set s [::laterm::Screen new 1 5]
+    $s consumeDirty
+
+    $s print A
+    $s consumeDirty
+    set changes [$s consumeDirty]
+
+    $s destroy
+    set changes
+} -result {rows {} cursor 0}
+
+test screen-dirty-tracking-004 {adjacent ranges merge} -body {
+    set s [::laterm::Screen new 1 10]
+    $s consumeDirty
+
+    $s markDirty 0 2 3
+    $s markDirty 0 4 6
+
+    set changes [$s consumeDirty]
+    $s destroy
+
+    dict get $changes rows
+} -result {0 {{2 6}}}
+
+test screen-dirty-tracking-005 {separate ranges remain separate} -body {
+    set s [::laterm::Screen new 1 10]
+    $s consumeDirty
+
+    $s markDirty 0 1 2
+    $s markDirty 0 7 8
+
+    set changes [$s consumeDirty]
+    $s destroy
+
+    dict get $changes rows
+} -result {0 {{1 2} {7 8}}}
+
+test screen-dirty-tracking-006 {scrolling marks affected rows} -body {
+    set s [::laterm::Screen new 4 5]
+    $s consumeDirty
+
+    $s setScrollRegion 1 2
+    $s scrollUp
+
+    set changes [$s consumeDirty]
+    $s destroy
+
+    dict get $changes rows
+} -result {1 {{0 4}} 2 {{0 4}}}
+
+test screen-dirty-tracking-007 {cursor movement is tracked} -body {
+    set s [::laterm::Screen new 3 5]
+    $s consumeDirty
+
+    $s moveCursor 2 3
+    set changes [$s consumeDirty]
+
+    $s destroy
+    dict get $changes cursor
+} -result 1
+
+::tcltest::cleanupTests
+

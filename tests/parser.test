@@ -4,14 +4,14 @@ source [file join [file dirname [info script]] .. parser.tcl]
 proc collect {args} { lappend ::events $args }
 proc setup {} { set ::events {}; return [::LATerm::Parser new collect] }
 
-test ascii-1 {ASCII print and C0 controls} -body {
+test parser-001 {ASCII print and C0 controls} -body {
     set p [setup]
     $p feed [binary format H* 41420809430a0d]
     $p destroy
     set ::events
 } -result {{print A} {print B} {control BS} {control HT} {print C} {control LF} {control CR}}
 
-test csi-1 {CSI split across reads} -body {
+test parser-002 {CSI split across reads} -body {
     set p [setup]
     $p feed "\033\[3"
     set midway [$p state]
@@ -20,7 +20,7 @@ test csi-1 {CSI split across reads} -body {
     list $midway $::events
 } -result {CSI {{csi 31 {} m} {print X}}}
 
-test cancel-1 {CAN aborts incomplete CSI} -body {
+test parser-003 {CAN aborts incomplete CSI} -body {
     set p [setup]
     $p feed "\033\[31\030Z"
     set result $::events
@@ -28,7 +28,7 @@ test cancel-1 {CAN aborts incomplete CSI} -body {
     set result
 } -result {{print Z}}
 
-test escape-1 {single ESC command} -body {
+test parser-004 {single ESC command} -body {
     set p [setup]
     $p feed "\033D"
     set result $::events
@@ -36,7 +36,7 @@ test escape-1 {single ESC command} -body {
     set result
 } -result {{escape D}}
 
-test esc-intermediate-1 {ESC with intermediate} -body {
+test parser-005 {ESC with intermediate} -body {
     set p [setup]
     $p feed "\033("
     $p feed "B"
@@ -45,7 +45,7 @@ test esc-intermediate-1 {ESC with intermediate} -body {
     set result
 } -result {{escape (B}}
 
-test csi-intermediate-1 {CSI intermediate} -body {
+test parser-006 {CSI intermediate} -body {
     set p [setup]
     $p feed "\033\[1 q"
     set result $::events
@@ -53,7 +53,7 @@ test csi-intermediate-1 {CSI intermediate} -body {
     set result
 } -result {{csi 1 { } q}}
 
-test esc-restart-1 {ESC interrupts partial CSI} -body {
+test parser-007 {ESC interrupts partial CSI} -body {
     set p [setup]
     $p feed "\033\[31\033D"
     set result $::events
