@@ -1,0 +1,161 @@
+package require Tcl 8.6
+package require tcltest 2
+
+namespace import ::tcltest::test
+
+if {[catch {package require Tk} tkError]} {
+    puts "Tk unavailable: $tkError"
+    ::tcltest::cleanupTests
+    return
+}
+
+set root [file dirname [file dirname [info script]]]
+lappend auto_path [file join $root render native]
+
+if {[catch {package require laterm_native_renderer} nativeError]} {
+    puts "Native renderer unavailable: $nativeError"
+    ::tcltest::cleanupTests
+    return
+}
+
+source [file join $root render screen.tcl]
+source [file join $root render mouse_controller.tcl]
+
+test native-renderer-001 {native widget draws basic screen rows} -body {
+    set screen [::LATerm::Screen new 2 6 0]
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+    pack [$renderer widget]
+    update idletasks
+
+    $screen print "A中B"
+    $renderer renderDirty
+    set result [list \
+        [$renderer widget] \
+        [.nativeTest rowText 0] \
+        [dict get [$renderer statistics] dirtyRenders]]
+
+    $renderer destroy
+    $screen destroy
+
+    set result
+} -result [list .nativeTest "A中B  " 1]
+
+test native-renderer-002 {native widget supports renderer statistics} -body {
+    set screen [::LATerm::Screen new 1 4 0]
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+
+    $renderer resetStatistics
+    $screen print ABCD
+    $renderer renderDirty
+    set stats [$renderer statistics]
+
+    set result [list \
+        [dict get $stats fullRedraws] \
+        [dict get $stats dirtyRenders] \
+        [dict get $stats styledRows] \
+        [dict get $stats cellReplacements]]
+
+    $renderer destroy
+    $screen destroy
+
+    set result
+} -result {0 1 1 0}
+
+test native-renderer-003 {native renderer tracks color and font style runs} -body {
+    set screen [::LATerm::Screen new 1 4 0]
+    $screen setAttributes [dict create fg "#ff0000" bold 1]
+    $screen print R
+    $screen setAttributes [dict create fg "#0000ff" italic 1]
+    $screen print B
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+
+    set result [list \
+        [.nativeTest rowText 0] \
+        [dict get [$renderer statistics] styleRuns]]
+
+    $renderer destroy
+    $screen destroy
+
+    set result
+} -result [list "RB  " 3]
+
+test native-renderer-004 {native widget refreshes changed dimensions} -body {
+    set screen [::LATerm::Screen new 1 4 0]
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+
+    $screen resize 2 6
+    $screen moveCursor 1 0
+    $screen print HELLO
+    $renderer renderDirty
+
+    set result [list \
+        [.nativeTest rowText 1] \
+        [dict get [$renderer statistics] fullRedraws] \
+        [dict get [$renderer statistics] dirtyRenders]]
+
+    $renderer destroy
+    $screen destroy
+
+    set result
+} -result [list "HELLO " 2 1]
+
+test native-renderer-005 {native selection returns selected screen text} -body {
+    set screen [::LATerm::Screen new 1 6 0]
+    $screen print "A中B"
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+
+    $renderer setSelection 0 1 0 2
+    set selected [$renderer selectionText]
+    $renderer setSelection 0 0 0 0
+    set single [$renderer selectionText]
+
+    $renderer destroy
+    $screen destroy
+
+    list $selected $single
+} -result [list "中" "A"]
+
+test native-renderer-006 {native widget reports cell metrics and updates cursor blink} -body {
+    set screen [::LATerm::Screen new 1 4 0]
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+    set cellSize [$renderer cellSize]
+    .nativeTest cursorBlink 0
+    .nativeTest cursorBlink 1
+
+    $renderer destroy
+    $screen destroy
+
+    expr {[llength $cellSize] == 2 &&
+        [lindex $cellSize 0] > 0 && [lindex $cellSize 1] > 0}
+} -result 1
+
+test native-renderer-007 {native mouse coordinates use native cell metrics} -body {
+    set screen [::LATerm::Screen new 2 4 0]
+    set mouse [::LATerm::MouseController new \
+        .nativeTest $screen unused unused {8 16}]
+
+    set inside [$mouse coordinates 17 19]
+    set outside [$mouse coordinates 32 0]
+
+    $mouse destroy
+    $screen destroy
+
+    list $inside $outside
+} -result [list {1 2} {}]
+
+test native-renderer-008 {native renderer accepts application default colors} -body {
+    set screen [::LATerm::Screen new 1 4 0]
+    set renderer [::LATerm::NativeRenderer new \
+        .nativeTest $screen TkFixedFont "#101010" "#f0f0f0"]
+
+    set result [list \
+        [.nativeTest cget -foreground] \
+        [.nativeTest cget -background]]
+
+    $renderer destroy
+    $screen destroy
+
+    set result
+} -result [list "#101010" "#f0f0f0"]
+
+::tcltest::cleanupTests

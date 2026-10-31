@@ -96,5 +96,132 @@ test text-renderer-005 {wide characters render correctly} -body {
     set result
 } -result "A中B  "
 
-::tcltest::cleanupTests
+test text-renderer-006 {style runs are applied during row insertion} -body {
+    text .test6
+    set s [::LATerm::Screen new 1 4]
+    set r [::LATerm::TkRenderer new .test6 $s]
 
+    $s setAttributes [dict create fg "#ff0000"]
+    $s print R
+    $s setAttributes [dict create fg "#0000ff"]
+    $s print B
+    $r renderDirty
+
+    set redTag ""
+    foreach tag [.test6 tag names 1.0] {
+        if {[string match latermStyle* $tag]} {
+            set redTag $tag
+            break
+        }
+    }
+
+    set blueTag ""
+    foreach tag [.test6 tag names 1.1] {
+        if {[string match latermStyle* $tag]} {
+            set blueTag $tag
+            break
+        }
+    }
+
+    set result [list \
+        [.test6 get 1.0 1.2] \
+        [.test6 tag cget $redTag -foreground] \
+        [.test6 tag cget $blueTag -foreground] \
+        [expr {$redTag ne $blueTag}]]
+
+    $r destroy
+    $s destroy
+    destroy .test6
+
+    set result
+} -result {RB #ff0000 #0000ff 1}
+
+test text-renderer-007 {single-cell style change redraws neighboring styles} -body {
+    text .test7
+    set s [::LATerm::Screen new 1 4]
+    set r [::LATerm::TkRenderer new .test7 $s]
+
+    $s setAttributes [dict create fg "#ff0000"]
+    $s print ABCD
+    $r renderDirty
+
+    $s setAttributes [dict create fg "#0000ff"]
+    $s moveCursor 0 1
+    $s print X
+    $r renderDirty
+
+    set tags {}
+    foreach index {1.0 1.1 1.2} {
+        set styleTag ""
+        foreach tag [.test7 tag names $index] {
+            if {[string match latermStyle* $tag]} {
+                set styleTag $tag
+                break
+            }
+        }
+        lappend tags [.test7 tag cget $styleTag -foreground]
+    }
+
+    set result [list [.test7 get 1.0 1.4] [join $tags ,]]
+
+    $r destroy
+    $s destroy
+    destroy .test7
+
+    set result
+} -result {AXCD #ff0000,#0000ff,#ff0000}
+
+test text-renderer-008 {wide glyph overwrite redraws correctly} -body {
+    text .test8
+    set s [::LATerm::Screen new 1 6]
+    set r [::LATerm::TkRenderer new .test8 $s]
+
+    $s print "A中B"
+    $r renderDirty
+    $s moveCursor 0 2
+    $s print C
+    $r renderDirty
+
+    set result [.test8 get 1.0 1.end]
+
+    $r destroy
+    $s destroy
+    destroy .test8
+
+    set result
+} -result "A CB  "
+
+test text-renderer-009 {same-style single-cell replacement uses fast path} -body {
+    text .test9
+    set s [::LATerm::Screen new 1 4]
+    set r [::LATerm::TkRenderer new .test9 $s]
+
+    $s setAttributes [dict create fg "#008000"]
+    $s print ABCD
+    $r renderDirty
+
+    $s moveCursor 0 1
+    $s print X
+    $r renderDirty
+
+    set styleTag ""
+    foreach tag [.test9 tag names 1.1] {
+        if {[string match latermStyle* $tag]} {
+            set styleTag $tag
+            break
+        }
+    }
+
+    set result [list \
+        [.test9 get 1.0 1.4] \
+        [.test9 tag cget $styleTag -foreground] \
+        [dict get [$r statistics] cellReplacements]]
+
+    $r destroy
+    $s destroy
+    destroy .test9
+
+    set result
+} -result {AXCD #008000 1}
+
+::tcltest::cleanupTests

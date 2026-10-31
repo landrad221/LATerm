@@ -141,4 +141,20 @@ test cursor-overlay-002 {hidden cursor remains hidden during blink} -body {
     set result
 } -result 0
 
+test cursor-overlay-003 {overlay replaces the Text cursor tag} -body {
+    set objects [::overlay814::create]
+    lassign $objects window screen adapter parser renderer overlay
+
+    $overlay refresh
+    update idletasks
+
+    set result [list \
+        [$window.terminal tag ranges latermCursor] \
+        [::overlay814::isPlaced $window.cursor]]
+
+    ::overlay814::cleanup $objects
+
+    set result
+} -result {{} 1}
+
 ::tcltest::cleanupTests
