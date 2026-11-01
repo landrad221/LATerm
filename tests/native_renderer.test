@@ -136,12 +136,14 @@ test native-renderer-007 {native mouse coordinates use native cell metrics} -bod
 
     set inside [$mouse coordinates 17 19]
     set outside [$mouse coordinates 32 0]
+    $mouse updateCellSize {10 20}
+    set afterFontChange [$mouse coordinates 17 19]
 
     $mouse destroy
     $screen destroy
 
-    list $inside $outside
-} -result [list {1 2} {}]
+    list $inside $outside $afterFontChange
+} -result [list {1 2} {} {0 1}]
 
 test native-renderer-008 {native renderer accepts application default colors} -body {
     set screen [::LATerm::Screen new 1 4 0]
@@ -157,5 +159,50 @@ test native-renderer-008 {native renderer accepts application default colors} -b
 
     set result
 } -result [list "#101010" "#f0f0f0"]
+
+test native-renderer-009 {native renderer updates fonts and colors at runtime} -body {
+    set screen [::LATerm::Screen new 1 4 0]
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+    set settings [dict create \
+        fontFamily [font actual TkFixedFont -family] \
+        fontSize 18 \
+        foreground "#101010" \
+        background "#f0f0f0"]
+
+    $renderer configureAppearance $settings
+    set result [list \
+        [.nativeTest cget -foreground] \
+        [.nativeTest cget -background] \
+        [font actual [.nativeTest cget -font] -size]]
+
+    $renderer destroy
+    $screen destroy
+
+    set result
+} -result [list "#101010" "#f0f0f0" 18]
+
+test native-renderer-010 {native renderer displays scrollback viewport} -body {
+    set screen [::LATerm::Screen new 2 3 10]
+    $screen print "AAABBB"
+    $screen scrollUp
+    set renderer [::LATerm::NativeRenderer new .nativeTest $screen]
+
+    $screen scrollViewport 1
+    $renderer renderDirty
+    set historyRows [list \
+        [.nativeTest rowText 0] \
+        [.nativeTest rowText 1]]
+
+    $screen scrollViewport -1
+    $renderer renderDirty
+    set liveRows [list \
+        [.nativeTest rowText 0] \
+        [.nativeTest rowText 1]]
+
+    $renderer destroy
+    $screen destroy
+
+    list $historyRows $liveRows
+} -result [list [list "AAA" "BBB"] [list "BBB" "   "]]
 
 ::tcltest::cleanupTests

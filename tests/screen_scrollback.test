@@ -144,5 +144,91 @@ test screen-scrollback-010 {scroll down does not add history} -body {
     set result
 } -result 0
 
-::tcltest::cleanupTests
+test screen-scrollback-011 {viewport combines history and live rows} -body {
+    set s [::LATerm::Screen new 2 3 10]
+    $s print "AAABBB"
+    $s scrollUp
 
+    set live [lmap row {0 1} {$s visibleRowCells $row}]
+    set offset [$s scrollViewport 1]
+    set scrolled [lmap row {0 1} {$s visibleRowCells $row}]
+
+    $s scrollViewport 100
+    set clamped [list \
+        [$s scrollbackOffset] \
+        [dict get [lindex [$s visibleRowCells 0] 0] text]]
+    $s scrollViewport -100
+    set returned [list \
+        [$s scrollbackOffset] \
+        [dict get [lindex [$s visibleRowCells 0] 0] text]]
+
+    $s destroy
+    list \
+        [dict get [lindex [lindex $live 0] 0] text] \
+        $offset \
+        [dict get [lindex [lindex $scrolled 0] 0] text] \
+        [dict get [lindex [lindex $scrolled 1] 0] text] \
+        $clamped \
+        $returned
+} -result [list "B" 1 "A" "B" [list 1 "A"] [list 0 "B"]]
+
+test screen-scrollback-012 {history viewport stays anchored as output arrives} -body {
+    set s [::LATerm::Screen new 2 3 10]
+    $s print "AAABBB"
+    $s scrollUp
+    $s scrollViewport 1
+    $s scrollUp
+
+    set result [list \
+        [$s scrollbackOffset] \
+        [dict get [lindex [$s visibleRowCells 0] 0] text]]
+
+    $s destroy
+    set result
+} -result [list 2 "A"]
+
+test screen-scrollback-013 {clearing history returns viewport to live screen} -body {
+    set s [::LATerm::Screen new 2 3 10]
+    $s print "AAABBB"
+    $s scrollUp
+    $s scrollViewport 1
+    $s clearScrollback
+
+    set result [list \
+        [$s scrollbackOffset] \
+        [dict get [lindex [$s visibleRowCells 0] 0] text]]
+
+    $s destroy
+    set result
+} -result [list 0 "B"]
+
+test screen-scrollback-014 {cursor is hidden while displaying scrollback} -body {
+    set s [::LATerm::Screen new 2 3 10]
+    $s print "AAABBB"
+    $s scrollUp
+    $s scrollViewport 1
+    set hidden [$s displayCursorVisible]
+    $s scrollViewport -1
+    set visible [$s displayCursorVisible]
+
+    $s destroy
+    list $hidden $visible
+} -result {0 1}
+
+test screen-scrollback-015 {alternate screen resets the history viewport} -body {
+    set s [::LATerm::Screen new 2 3 10]
+    $s print "AAABBB"
+    $s scrollUp
+    $s scrollViewport 1
+    $s enterAlternate
+    $s leaveAlternate
+
+    set result [list \
+        [$s scrollbackOffset] \
+        [dict get [lindex [$s visibleRowCells 0] 0] text]]
+
+    $s destroy
+    set result
+} -result [list 0 "B"]
+
+::tcltest::cleanupTests
