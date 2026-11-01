@@ -16,6 +16,8 @@ source focus_controller.tcl
 source cursor_overlay.tcl
 source pty_writer.tcl
 
+lappend auto_path [file join [file dirname [file normalize [info script]]] render native]
+
 namespace eval ::LATerm {}
 
 oo::class create ::LATerm::Application {
@@ -26,6 +28,7 @@ oo::class create ::LATerm::Application {
     variable terminal cursorCanvas
     variable ptyChannel ptyFile pid
     variable writer screen adapter parser renderer keyboard clipboard
+    variable rendererBackend selectionAnchor
     variable mouseEncoder mouseController focusController cursorOverlay
     variable resizeController
     variable shuttingDown childReaped ptyClosed shutdownAttempts
@@ -37,8 +40,17 @@ oo::class create ::LATerm::Application {
 
     # Initialize lifecycle flags/statistics, then build and start LATerm.
     constructor {} {
+        set rendererBackend text
+        if {[info exists ::env(LATerm_RENDERER)]} {
+            set rendererBackend [string tolower $::env(LATerm_RENDERER)]
+        }
+        if {$rendererBackend ni {text native}} {
+            error "unsupported LATerm_RENDERER \"$rendererBackend\" (expected text or native)"
+        }
+
         set terminal .terminal
         set cursorCanvas .cursorOverlay
+        set selectionAnchor ""
 
         set pid ""
         set shuttingDown 0
@@ -71,9 +83,6 @@ oo::class create ::LATerm::Application {
     # the interactive shell. PTY data is handled asynchronously by
     # readPty; the read budget limits work per event-loop callback.
     method initialize {} {
-        set cursorCanvas [canvas $cursorCanvas]
-        text $terminal
-
         lassign [pty::open] ptyChannel ptyFile
         set writer [::LATerm::PtyWriter new \
             $ptyChannel 1048576 [list [self] onPtyWriterFailure]]
@@ -81,20 +90,40 @@ oo::class create ::LATerm::Application {
         set adapter [::LATerm::ScreenAdapter new \
             $screen [list $writer send]]
         set parser [::LATerm::Parser new [list $adapter event]]
-        set renderer [::LATerm::TkRenderer new $terminal $screen]
+
+        if {$rendererBackend eq "native"} {
+            text $terminal
+            set defaultForeground [$terminal cget -foreground]
+            set defaultBackground [$terminal cget -background]
+            destroy $terminal
+            package require laterm_native_renderer
+            set renderer [::LATerm::NativeRenderer new \
+                $terminal $screen TkFixedFont \
+                $defaultForeground $defaultBackground]
+            set terminal [$renderer widget]
+        } else {
+            set cursorCanvas [canvas $cursorCanvas]
+            text $terminal
+            set renderer [::LATerm::TkRenderer new $terminal $screen]
+        }
+
         set keyboard [::LATerm::KeyboardEncoder new $screen]
         set clipboard [::LATerm::ClipboardController new $screen $writer]
         set mouseEncoder [::LATerm::MouseEncoder new $screen]
         set focusController [::LATerm::FocusController new \
             $screen [list $writer send]]
         set mouseController [::LATerm::MouseController new \
-            $terminal $screen $mouseEncoder $writer]
-        set cursorOverlay [::LATerm::CursorOverlay new \
-            $cursorCanvas $terminal $renderer $screen]
-
-        $renderer setCursorOverlay $cursorOverlay
-        $renderer updateCursor
-        $cursorOverlay refresh
+            $terminal $screen $mouseEncoder $writer \
+            [expr {$rendererBackend eq "native" ? [$renderer cellSize] : ""}]]
+        if {$rendererBackend eq "text"} {
+            set cursorOverlay [::LATerm::CursorOverlay new \
+                $cursorCanvas $terminal $renderer $screen]
+            $renderer setCursorOverlay $cursorOverlay
+            $renderer updateCursor
+            $cursorOverlay refresh
+        } else {
+            set cursorOverlay ""
+        }
 
         set heartbeatLast [clock milliseconds]
         set heartbeatTimer [after 100 [list [self] pipelineHeartbeat]]
@@ -116,13 +145,15 @@ oo::class create ::LATerm::Application {
         set resizeController [::LATerm::ResizeController new \
             $terminal $screen $ptyChannel]
 
-        $terminal configure \
-            -wrap none \
-            -selectbackground "#365a85" \
-            -selectforeground "#ffffff" \
-            -inactiveselectbackground "#365a85" \
-            -exportselection 1 \
-            -takefocus 1
+        if {$rendererBackend eq "text"} {
+            $terminal configure \
+                -wrap none \
+                -selectbackground "#365a85" \
+                -selectforeground "#ffffff" \
+                -inactiveselectbackground "#365a85" \
+                -exportselection 1 \
+                -takefocus 1
+        }
 
         pack $terminal -fill both -expand true
         bind $terminal <KeyPress> \
@@ -139,7 +170,8 @@ oo::class create ::LATerm::Application {
 
     # Install terminal mouse, focus, clipboard, and keyboard bindings.
     # The custom bindtag runs before Tk's default Text selection bindings,
-    # allowing terminal mouse-reporting modes to consume those events.
+    # allowing terminal mouse-reporting modes to consume those events and
+    # providing cell-based selection for the native widget.
     method installBindings {} {
         bind LATermMouse <ButtonPress-1> \
             [list [self] handleMouse press 1 %x %y %s]
@@ -256,6 +288,7 @@ oo::class create ::LATerm::Application {
         puts stderr "Dirty render calls: [dict get $stats dirtyRenders]"
         puts stderr "Styled rows: $rows"
         puts stderr "Style runs: $runs"
+        puts stderr "Single-cell replacements: [dict get $stats cellReplacements]"
 
         if {$rows > 0} {
             puts stderr [format "Avg style runs/row: %.2f" \
@@ -330,6 +363,48 @@ oo::class create ::LATerm::Application {
     # args contains the callback-specific integer x, y, and state values.
     # Return Tk's break code only when MouseController consumed the event.
     method handleMouse {operation button args} {
+        if {$rendererBackend eq "native" &&
+            ![$mouseController reporting]} {
+            switch -- $operation {
+                press {
+                    if {$button == 1} {
+                        lassign $args x y state
+                        set selectionAnchor \
+                            [$mouseController coordinates $x $y]
+                        if {$selectionAnchor ne ""} {
+                            $renderer setSelection {*}$selectionAnchor \
+                                {*}$selectionAnchor
+                        }
+                        return -code break
+                    }
+                }
+                motion {
+                    if {$selectionAnchor ne ""} {
+                        lassign $args x y state
+                        set position [$mouseController coordinates $x $y]
+                        if {$position ne ""} {
+                            $renderer setSelection {*}$selectionAnchor {*}$position
+                        }
+                        return -code break
+                    }
+                }
+                release {
+                    if {$button == 1 && $selectionAnchor ne ""} {
+                        lassign $args x y state
+                        set position [$mouseController coordinates $x $y]
+                        if {$position ne ""} {
+                            $renderer setSelection {*}$selectionAnchor {*}$position
+                        }
+                        set selectionAnchor ""
+                        return -code break
+                    }
+                }
+                wheel {
+                    return
+                }
+            }
+        }
+
         switch -- $operation {
             motion {
                 set handled [$mouseController motion {*}$args]
@@ -355,7 +430,15 @@ oo::class create ::LATerm::Application {
     # Handle Ctrl+Shift+C for the Tk widget path and suppress default
     # Text-widget handling.
     method handleClipboardCopy {widget} {
-        $clipboard copySelection $widget
+        if {$rendererBackend eq "native"} {
+            set text [$renderer selectionText]
+            if {$text ne ""} {
+                clipboard clear -displayof $widget
+                clipboard append -displayof $widget -- $text
+            }
+        } else {
+            $clipboard copySelection $widget
+        }
         return -code break
     }
 

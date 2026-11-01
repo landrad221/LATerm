@@ -932,6 +932,18 @@ oo::class create ::LATerm::Screen {
         return [lindex $grid $row $col]
     }
 
+    # Return all cell dictionaries for one zero-based row. This is the
+    # batch access point used by native renderers to avoid per-cell Tcl
+    # object dispatch.
+    method rowCells {row} {
+        if {![string is integer -strict $row] ||
+            $row < 0 || $row >= $rows} {
+            error "row out of range"
+        }
+
+        return [lindex $grid $row]
+    }
+
     # Move the cursor to zero-based integer row/col, clearing delayed wrap.
     method moveCursor {row col} {
         my checkPosition $row $col

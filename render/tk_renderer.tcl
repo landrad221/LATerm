@@ -7,6 +7,7 @@ oo::class create ::LATerm::TkRenderer {
     variable widget screen
     variable styleCache styleCount fontCache
     variable renderedRows renderedCols
+    variable renderedRowCells
     variable cursorOverlay
     variable profile
 
@@ -21,12 +22,14 @@ oo::class create ::LATerm::TkRenderer {
         set fontCache {}
         set renderedRows -1
         set renderedCols -1
+        set renderedRowCells {}
         set cursorOverlay ""
         set profile [dict create \
                     fullRedraws 0 \
                     dirtyRenders 0 \
                     styledRows 0 \
                     styleRuns 0 \
+                    cellReplacements 0 \
                     buildUs 0 \
                     tkUs 0 \
                     maxRowUs 0]
@@ -47,6 +50,9 @@ oo::class create ::LATerm::TkRenderer {
     # Register an optional cursor overlay object. It must implement
     # updatePosition; an empty value restores the Text-tag cursor.
     method setCursorOverlay {overlayObject} {
+        if {$overlayObject ne ""} {
+            $widget tag remove latermCursor 1.0 end
+        }
         set cursorOverlay $overlayObject
     }
 
@@ -55,7 +61,6 @@ oo::class create ::LATerm::TkRenderer {
     # cell already contains the full character.
     method rowText {row} {
         lassign [$screen dimensions] rows cols
-
         set output ""
 
         for {set col 0} {$col < $cols} {incr col} {
@@ -116,6 +121,7 @@ oo::class create ::LATerm::TkRenderer {
 
         # Rebuild the required number of Text lines.
         set lines [lrepeat $rows ""]
+        set renderedRowCells {}
 
         $widget configure -state normal
         $widget delete 1.0 end
@@ -172,7 +178,10 @@ oo::class create ::LATerm::TkRenderer {
 
             try {
                 foreach row [lsort -integer [dict keys $dirtyRows]] {
-                    my renderStyledRow $row
+                    if {![my replaceDirtyCell \
+                        $row [dict get $dirtyRows $row]]} {
+                        my renderStyledRow $row
+                    }
                 }
             } finally {
                 $widget configure -state disabled
@@ -200,6 +209,10 @@ oo::class create ::LATerm::TkRenderer {
     # A cursor on a wide-character continuation cell is snapped to its
     # leading cell so the rendered index remains valid.
     method updateCursor {} {
+        if {$cursorOverlay ne ""} {
+            return
+        }
+
         # Remove the previous cursor highlight.
         $widget tag remove latermCursor 1.0 end
 
@@ -311,12 +324,48 @@ oo::class create ::LATerm::TkRenderer {
 
 
 
-    # Rebuild one zero-based row and apply a tag to each contiguous run
-    # of identical style. Tcl character offsets are tracked separately
-    # from terminal columns to account for wide and combining characters.
+    # row is a zero-based screen row and ranges is its inclusive dirty-range
+    # list. Replace a single cell directly only when old/new geometry and
+    # style match; this avoids retagging all 80 cells for common updates.
+    method replaceDirtyCell {row ranges} {
+        if {[llength $ranges] != 1 ||
+            [lindex [lindex $ranges 0] 0] !=
+            [lindex [lindex $ranges 0] 1] ||
+            ![dict exists $renderedRowCells $row]} {
+            return 0
+        }
+
+        set col [lindex [lindex $ranges 0] 0]
+        set cell [$screen cell $row $col]
+        set text [dict get $cell text]
+
+        if {[dict get $cell width] != 1 ||
+            [string length $text] != 1} {
+            return 0
+        }
+
+        lassign [lindex [dict get $renderedRowCells $row] $col] \
+            oldWidth oldLength oldStyle index
+        if {$oldWidth != 1 || $oldLength != 1} {
+            return 0
+        }
+
+        set style [my styleTag $cell]
+        if {$style ne $oldStyle} {
+            return 0
+        }
+
+        set line [expr {$row + 1}]
+        $widget replace "$line.$index" "$line.[expr {$index + 1}]" $text
+        dict incr profile cellReplacements
+        return 1
+    }
+
+    # Rebuild one zero-based row as contiguous style runs. Rows with one
+    # style use a plain insert plus one tag range; varied rows pass the
+    # text/tag pairs to Tk in one insert command to reduce widget dispatch.
     method renderStyledRow {row} {
         lassign [$screen dimensions] rows cols
-
         set line [expr {$row + 1}]
         set rowStart [clock microseconds]
 
@@ -325,24 +374,23 @@ oo::class create ::LATerm::TkRenderer {
         set runStart 0
         set textOffset 0
         set runs {}
+        set rowMetadata {}
 
-        # Build the row and its style runs.
         for {set col 0} {$col < $cols} {incr col} {
             set cell [$screen cell $row $col]
-
-            if {[dict get $cell width] == 0} {
+            set width [dict get $cell width]
+            if {$width == 0} {
+                lappend rowMetadata [list 0 0 "" $textOffset]
                 continue
             }
 
             set style [my styleTag $cell]
             set char [dict get $cell text]
+            lappend rowMetadata \
+                [list $width [string length $char] $style $textOffset]
 
-            if {$previousStyle ne "" &&
-                $style ne $previousStyle} {
-
-                lappend runs [list \
-                    $runStart $textOffset $previousStyle]
-
+            if {$previousStyle ne "" && $style ne $previousStyle} {
+                lappend runs [list $runStart $textOffset $previousStyle]
                 set runStart $textOffset
             }
 
@@ -352,30 +400,35 @@ oo::class create ::LATerm::TkRenderer {
         }
 
         if {$previousStyle ne ""} {
-            lappend runs [list \
-                $runStart $textOffset $previousStyle]
+            lappend runs [list $runStart $textOffset $previousStyle]
         }
 
+        set runCount [llength $runs]
         set buildEnd [clock microseconds]
-
-        # Update the Tk Text widget.
         $widget delete "$line.0" "$line.end"
-        $widget insert "$line.0" $output
 
-        foreach run $runs {
-            lassign $run start end tag
-
-            $widget tag add $tag \
-                "$line.$start" "$line.$end"
+        if {$runCount == 1} {
+            set tag [lindex [lindex $runs 0] 2]
+            $widget insert "$line.0" $output
+            $widget tag add $tag "$line.0" "$line.end"
+        } elseif {$runCount > 1} {
+            set segments {}
+            foreach run $runs {
+                lassign $run start end tag
+                lappend segments \
+                    [string range $output $start [expr {$end - 1}]] \
+                    [list $tag]
+            }
+            $widget insert "$line.0" {*}$segments
         }
 
         set rowEnd [clock microseconds]
 
-        # Record profiling data.
         dict incr profile styledRows
-        dict incr profile styleRuns [llength $runs]
+        dict incr profile styleRuns $runCount
         dict incr profile buildUs [expr {$buildEnd - $rowStart}]
         dict incr profile tkUs [expr {$rowEnd - $buildEnd}]
+        dict set renderedRowCells $row $rowMetadata
 
         set rowUs [expr {$rowEnd - $rowStart}]
 
@@ -413,6 +466,7 @@ oo::class create ::LATerm::TkRenderer {
             dirtyRenders 0 \
             styledRows 0 \
             styleRuns 0 \
+            cellReplacements 0 \
             buildUs 0 \
             tkUs 0 \
             maxRowUs 0]

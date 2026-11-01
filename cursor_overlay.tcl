@@ -92,6 +92,7 @@ oo::class create ::LATerm::CursorOverlay {
         lassign [$screen cursor] row col
 
         set index [$renderer cursorIndex]
+        set index [$renderer cursorIndex]
         set bbox [$textWidget bbox $index]
 
         if {$bbox eq ""} {
