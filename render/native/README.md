@@ -11,9 +11,19 @@ cmake --build /tmp/laterm-native-build
 wish main.tcl
 ```
 
+Open **Settings → Appearance** (or press **Ctrl+,**) to change the font,
+text color, and background. Apply previews changes immediately; Save stores
+them in `$XDG_CONFIG_HOME/laterm/appearance.conf`, or
+`$HOME/.config/laterm/appearance.conf` when `XDG_CONFIG_HOME` is unset.
+Cancel restores the appearance that was active when the dialog opened.
+Scroll through retained output with the mouse wheel; **Shift+PageUp** and
+**Shift+PageDown** move by one screen. Scrolling returns to live output at
+the newest row.
+
 This X11 renderer provides `::LATerm::NativeRenderer`, a C-backed renderer
 with `render`, `renderDirty`, `updateCursor`, `statistics`, and
-`resetStatistics` methods. It creates a native Tk window; ask for its Tk path
+`resetStatistics` methods, plus `configureAppearance` for runtime font and
+color changes. It creates a native Tk window; ask for its Tk path
 with `$renderer widget` and pack that window to display it. The optional third
 constructor argument is a Tk font description, for example
 `{{DejaVu Sans Mono} 11}`.
@@ -59,6 +69,7 @@ Run the native renderer tests with:
 
 ```sh
 tclsh tests/native_renderer.test
+tclsh tests/appearance_dialog.test
 ```
 
 Run the native renderer benchmark with:

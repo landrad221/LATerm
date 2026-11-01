@@ -28,6 +28,10 @@ oo::class create ::LATerm::MouseController {
         return [$screen mouseReportingEnabled]
     }
 
+    method updateCellSize {size} {
+        set cellSize $size
+    }
+
     # Translate widget-relative pixel coordinates into zero-based
     # terminal row/column coordinates. x and y are integer Tk event
     # coordinates; returns {row col}, or {} when outside the screen.

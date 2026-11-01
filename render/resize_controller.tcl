@@ -15,8 +15,16 @@ oo::class create ::LATerm::ResizeController {
         set screen $screenObject
         set ptyChannel $channel
 
-        set fontName [$widget cget -font]
+        set lastRows 0
+        set lastCols 0
+        set pending ""
+        my refreshFontMetrics
+        bind $widget <Configure> [list [self] scheduleResize]
+    }
 
+    # Recompute cell dimensions after the terminal font changes.
+    method refreshFontMetrics {} {
+        set fontName [$widget cget -font]
         set cellWidth [font measure $fontName "M"]
         set cellHeight [font metrics $fontName -linespace]
 
@@ -26,9 +34,7 @@ oo::class create ::LATerm::ResizeController {
 
         set lastRows 0
         set lastCols 0
-        set pending ""
-        
-        bind $widget <Configure> [list [self] scheduleResize]
+        my scheduleResize
     }
 
     # Debounce Configure events so a burst of geometry changes results

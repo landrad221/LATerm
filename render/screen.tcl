@@ -13,7 +13,7 @@ oo::class create ::LATerm::Screen {
     variable scrollTop scrollBottom tabStops
     variable dirtyRows cursorDirty
     variable primaryState alternateState activeBuffer
-    variable scrollback scrollbackLimit
+    variable scrollback scrollbackLimit scrollbackOffset
     variable savedCursor
     variable mode1049Active
     variable cursorVisible
@@ -81,6 +81,7 @@ oo::class create ::LATerm::Screen {
         set activeBuffer primary
         set scrollback {}
         set scrollbackLimit $historyLimit
+        set scrollbackOffset 0
         set savedCursor {}
         set mode1049Active 0
     }
@@ -245,6 +246,10 @@ oo::class create ::LATerm::Screen {
 
     method cursorVisible {} {
         return $cursorVisible
+    }
+
+    method displayCursorVisible {} {
+        return [expr {$cursorVisible && $scrollbackOffset == 0}]
     }
 
     # Set cursor visibility from a boolean-like value and mark the cursor
@@ -430,6 +435,9 @@ oo::class create ::LATerm::Screen {
         }
 
         lappend scrollback $line
+        if {$scrollbackOffset > 0} {
+            incr scrollbackOffset
+        }
 
         set excess [expr {
             [llength $scrollback] - $scrollbackLimit
@@ -437,6 +445,12 @@ oo::class create ::LATerm::Screen {
 
         if {$excess > 0} {
             set scrollback [lrange $scrollback $excess end]
+            if {$scrollbackOffset > 0} {
+                set scrollbackOffset [expr {
+                    min($scrollbackOffset, [llength $scrollback])
+                }]
+                my markAllDirty
+            }
         }
     }
 
@@ -462,6 +476,8 @@ oo::class create ::LATerm::Screen {
 
     method clearScrollback {} {
         set scrollback {}
+        set scrollbackOffset 0
+        my markAllDirty
     }
 
     # Change the history capacity to a nonnegative integer row count.
@@ -476,6 +492,8 @@ oo::class create ::LATerm::Screen {
 
         if {$limit == 0} {
             set scrollback {}
+            set scrollbackOffset 0
+            my markAllDirty
             return
         }
 
@@ -485,7 +503,54 @@ oo::class create ::LATerm::Screen {
 
         if {$excess > 0} {
             set scrollback [lrange $scrollback $excess end]
+            set scrollbackOffset [expr {
+                min($scrollbackOffset, [llength $scrollback])
+            }]
+            my markAllDirty
         }
+    }
+
+    # Move the display viewport through primary-buffer history. Positive
+    # values show older rows; zero follows the live screen.
+    method scrollViewport {delta} {
+        if {![string is integer -strict $delta]} {
+            error "invalid viewport scroll count"
+        }
+        if {$activeBuffer ne "primary"} {
+            return $scrollbackOffset
+        }
+
+        set newOffset [expr {
+            max(0, min([llength $scrollback], $scrollbackOffset + $delta))
+        }]
+        if {$newOffset != $scrollbackOffset} {
+            set scrollbackOffset $newOffset
+            my markAllDirty
+        }
+        return $scrollbackOffset
+    }
+
+    method scrollbackOffset {} {
+        return $scrollbackOffset
+    }
+
+    # Return the row shown at a screen coordinate, including retained
+    # history when the viewport is scrolled back.
+    method visibleRowCells {row} {
+        if {![string is integer -strict $row] ||
+            $row < 0 || $row >= $rows} {
+            error "row out of range"
+        }
+        if {$scrollbackOffset == 0 || $activeBuffer ne "primary"} {
+            return [lindex $grid $row]
+        }
+
+        set historySize [llength $scrollback]
+        set historyRow [expr {$historySize - $scrollbackOffset + $row}]
+        if {$historyRow < $historySize} {
+            return [my resizeRow [lindex $scrollback $historyRow] $cols]
+        }
+        return [lindex $grid [expr {$historyRow - $historySize}]]
     }
 
     
@@ -549,6 +614,7 @@ oo::class create ::LATerm::Screen {
         if {$activeBuffer eq "alternate"} {
             return
         }
+        set scrollbackOffset 0
 
         # Preserve the primary screen.
         set primaryState [my captureState]
@@ -573,6 +639,7 @@ oo::class create ::LATerm::Screen {
         # Preserve the alternate buffer for possible reuse.
         set alternateState [my captureState]
 
+        set scrollbackOffset 0
         set activeBuffer primary
         my restoreState $primaryState
     }

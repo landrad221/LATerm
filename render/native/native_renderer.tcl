@@ -16,30 +16,12 @@ oo::class create ::LATerm::NativeRenderer {
         set blinkEnabled 0
         set blinkVisible 1
         set fontNames {}
-        set family [font actual $baseFont -family]
-        set size [font actual $baseFont -size]
-
-        foreach {weight slant} {
-            bold roman
-            normal italic
-            bold italic
-        } {
-            lappend fontNames [font create \
-                -family $family \
-                -size $size \
-                -weight $weight \
-                -slant $slant]
-        }
-
         set widgetPath [::LATerm::native::create $path $screenObject]
-        $widgetPath configure \
-            -font $baseFont \
-            -boldfont [lindex $fontNames 0] \
-            -italicfont [lindex $fontNames 1] \
-            -bolditalicfont [lindex $fontNames 2] \
-            -foreground $foreground \
-            -background $background
-        $widgetPath render
+        my configureAppearance [dict create \
+            fontFamily [font actual $baseFont -family] \
+            fontSize [font actual $baseFont -size] \
+            foreground $foreground \
+            background $background]
         my syncCursorBlink
     }
 
@@ -64,6 +46,52 @@ oo::class create ::LATerm::NativeRenderer {
 
     method cellSize {} {
         return [$widgetPath cellSize]
+    }
+
+    method configureAppearance {settings} {
+        set family [dict get $settings fontFamily]
+        set size [dict get $settings fontSize]
+        set foreground [dict get $settings foreground]
+        set background [dict get $settings background]
+        set newFontNames {}
+
+        try {
+            foreach {weight slant} {
+                bold roman
+                normal italic
+                bold italic
+            } {
+                lappend newFontNames [font create \
+                    -family $family \
+                    -size $size \
+                    -weight $weight \
+                    -slant $slant]
+            }
+
+            $widgetPath configure \
+                -font [list $family $size] \
+                -boldfont [lindex $newFontNames 0] \
+                -italicfont [lindex $newFontNames 1] \
+                -bolditalicfont [lindex $newFontNames 2] \
+                -foreground $foreground \
+                -background $background
+        } on error {message options} {
+            foreach fontName $newFontNames {
+                font delete $fontName
+            }
+            return -options $options $message
+        }
+
+        set oldFontNames $fontNames
+        set fontNames $newFontNames
+        foreach fontName $oldFontNames {
+            font delete $fontName
+        }
+        $widgetPath render
+    }
+
+    method window {} {
+        return $widgetPath
     }
 
     method setSelection {startRow startCol endRow endCol} {

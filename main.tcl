@@ -13,6 +13,7 @@ source render/mouse_encoder.tcl
 source render/mouse_controller.tcl
 source focus_controller.tcl
 source pty_writer.tcl
+source appearance_dialog.tcl
 
 lappend auto_path [file join [file dirname [file normalize [info script]]] render native]
 package require laterm_native_renderer
@@ -30,6 +31,7 @@ oo::class create ::LATerm::Application {
     variable selectionAnchor
     variable mouseEncoder mouseController focusController
     variable resizeController
+    variable appearance appearanceDialog
     variable shuttingDown childReaped ptyClosed shutdownAttempts
     variable childMonitorTimer shutdownTimer ptyResumeTimer
     variable ptyReadBudget renderTimer renderInterval
@@ -65,6 +67,16 @@ oo::class create ::LATerm::Application {
             renderUs 0 \
             maxParseUs 0 \
             maxRenderUs 0]
+        set appearanceDialog ""
+        if {[catch {::LATerm::Appearance::load} appearanceError]} {
+            puts stderr "LATerm: $appearanceError"
+            set appearance [::LATerm::Appearance::defaults]
+            after idle [list tk_messageBox -icon warning \
+                -title "Appearance settings" \
+                -message "Could not load appearance settings:\n$appearanceError"]
+        } else {
+            set appearance $appearanceError
+        }
 
         my initialize
     }
@@ -81,7 +93,11 @@ oo::class create ::LATerm::Application {
             $screen [list $writer send]]
         set parser [::LATerm::Parser new [list $adapter event]]
 
-        set renderer [::LATerm::NativeRenderer new $terminal $screen]
+        set renderer [::LATerm::NativeRenderer new $terminal $screen \
+            [list [dict get $appearance fontFamily] \
+                [dict get $appearance fontSize]] \
+            [dict get $appearance foreground] \
+            [dict get $appearance background]]
         set terminal [$renderer widget]
 
         set keyboard [::LATerm::KeyboardEncoder new $screen]
@@ -102,12 +118,20 @@ oo::class create ::LATerm::Application {
             -encoding binary
         fileevent $ptyChannel readable [list [self] readPty]
 
-        set pid [pty::spawn $ptyChannel $ptyFile /bin/bash -i]
+        set pid [pty::spawn $ptyChannel $ptyFile $::env(SHELL)]
         pty::resize $ptyChannel 40 120
         set childMonitorTimer [after 200 [list [self] checkChild]]
 
         wm title . 'LATerm'
         wm protocol . WM_DELETE_WINDOW [list [self] shutdownTerminal]
+        menu .menubar
+        . configure -menu .menubar
+        menu .menubar.appearance -tearoff 0
+        .menubar add cascade -label "Settings" -menu .menubar.appearance
+        .menubar.appearance add command -label "Appearance..." \
+            -accelerator "Ctrl+," \
+            -command [list [self] openAppearanceDialog]
+        bind . <Control-comma> [list [self] openAppearanceDialog]
 
         set resizeController [::LATerm::ResizeController new \
             $terminal $screen $ptyChannel]
@@ -147,6 +171,10 @@ oo::class create ::LATerm::Application {
             [list [self] handleMouse wheel wheel-up %x %y %s]
         bind LATermMouse <ButtonPress-5> \
             [list [self] handleMouse wheel wheel-down %x %y %s]
+        bind LATermMouse <MouseWheel> \
+            [list [self] handleScrollWheel %D %x %y %s]
+        bind $terminal <Shift-Prior> [list [self] scrollHistory page-up]
+        bind $terminal <Shift-Next> [list [self] scrollHistory page-down]
 
         bind $terminal <FocusIn> [list $focusController send 1]
         bind $terminal <FocusOut> [list $focusController send 0]
@@ -154,6 +182,32 @@ oo::class create ::LATerm::Application {
             [list [self] handleClipboardPaste %W]
         bind $terminal <Control-Shift-KeyPress-C> \
             [list [self] handleClipboardCopy %W]
+    }
+
+    method openAppearanceDialog {} {
+        if {[info object isa object $appearanceDialog]} {
+            raise [$appearanceDialog window]
+            return
+        }
+
+        set appearanceDialog [::LATerm::AppearanceDialog new \
+            $appearance \
+            [list [self] applyAppearance] \
+            [list [self] saveAppearance]]
+    }
+
+    method applyAppearance {settings} {
+        set settings [::LATerm::Appearance::validate $settings]
+        $renderer configureAppearance $settings
+        set appearance $settings
+        $mouseController updateCellSize [$renderer cellSize]
+        $resizeController refreshFontMetrics
+    }
+
+    method saveAppearance {settings} {
+        set settings [::LATerm::Appearance::validate $settings]
+        ::LATerm::Appearance::save $settings
+        set appearance $settings
     }
 
     # Re-enable readable notifications after the one-millisecond yield.
@@ -314,11 +368,58 @@ oo::class create ::LATerm::Application {
         return -code break
     }
 
+    method handleScrollWheel {delta x y state} {
+        if {[$mouseController reporting] &&
+            ($state & 0x0001) == 0} {
+            set handled [$mouseController wheel \
+                [expr {$delta > 0 ? "wheel-up" : "wheel-down"}] \
+                $x $y $state]
+            if {$handled} {
+                return -code break
+            }
+            return
+        }
+
+        if {$delta != 0} {
+            my scrollHistory [expr {$delta > 0 ? "up" : "down"}]
+        }
+        return -code break
+    }
+
+    method scrollHistory {direction} {
+        lassign [$screen dimensions] rows
+        switch -- $direction {
+            up - page-up {
+                set amount [expr {$direction eq "page-up" ? $rows : 3}]
+                $screen scrollViewport $amount
+            }
+            down - page-down {
+                set amount [expr {$direction eq "page-down" ? $rows : -3}]
+                $screen scrollViewport [expr {-$amount}]
+            }
+            default {
+                error "unknown scroll direction: $direction"
+            }
+        }
+        $renderer renderDirty
+        return -code break
+    }
+
     # Dispatch mouse events from the custom bindtag. operation is motion,
     # press, release, or wheel; button is a button number/direction string;
     # args contains the callback-specific integer x, y, and state values.
     # Return Tk's break code only when MouseController consumed the event.
     method handleMouse {operation button args} {
+        if {$operation eq "wheel" &&
+            ([lindex $args 2] & 0x0001) != 0} {
+            if {$button eq "wheel-up"} {
+                my scrollHistory up
+            } else {
+                my scrollHistory down
+            }
+            return -code break
+        }
+
         if {![$mouseController reporting]} {
             switch -- $operation {
                 press {
@@ -355,7 +456,12 @@ oo::class create ::LATerm::Application {
                     }
                 }
                 wheel {
-                    return
+                    if {$button eq "wheel-up"} {
+                        my scrollHistory up
+                    } else {
+                        my scrollHistory down
+                    }
+                    return -code break
                 }
             }
         }

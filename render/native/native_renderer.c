@@ -249,7 +249,7 @@ DictInt(Tcl_Interp *interp, Tcl_Obj *dict, const char *key, int *value)
 static int
 RefreshRow(NativeWidget *widget, int row)
 {
-    Tcl_Obj *method = Tcl_NewStringObj("rowCells", -1);
+    Tcl_Obj *method = Tcl_NewStringObj("visibleRowCells", -1);
     Tcl_Obj *rowObj = Tcl_NewIntObj(row);
     Tcl_Obj **cells;
     int count;
@@ -373,7 +373,7 @@ RefreshCursor(NativeWidget *widget)
         return TCL_ERROR;
     }
 
-    method = Tcl_NewStringObj("cursorVisible", -1);
+    method = Tcl_NewStringObj("displayCursorVisible", -1);
     Tcl_IncrRefCount(method);
     args[0] = method;
     if (CallScreen(widget, 1, args) != TCL_OK ||
