@@ -8,12 +8,12 @@ oo::class create ::LATerm::MouseController {
     variable cellSize
     variable pressedButton lastPosition
 
-    # textWidget is the Tk Text widget; screenObject provides cell
+    # terminalWidget is the Tk terminal widget; screenObject provides cell
     # coordinates and tracking modes; mouseEncoder encodes terminal
     # reports; writerObject queues reports to the PTY.
-    constructor {textWidget screenObject mouseEncoder writerObject
+    constructor {terminalWidget screenObject mouseEncoder writerObject
             {nativeCellSize ""}} {
-        set widget $textWidget
+        set widget $terminalWidget
         set screen $screenObject
         set encoder $mouseEncoder
         set writer $writerObject
@@ -49,11 +49,9 @@ oo::class create ::LATerm::MouseController {
             return [list $row $col]
         }
 
-        # Convert a Tk Text index to a screen row and cell column.
-        #
-        # This handles the Text widget's internal padding and
-        # viewport position more reliably than dividing x/y
-        # by a fixed character size.
+        # Native cell metrics are used by LATerm's native widget. The
+        # Text-compatible path uses Tk indices to account for widget
+        # padding and viewport position.
         set index [$widget index "@${x},${y}"]
         lassign [split $index .] line charOffset
 

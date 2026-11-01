@@ -7,11 +7,11 @@ oo::class create ::LATerm::ResizeController {
     variable lastRows lastCols
     variable pending
 
-    # textWidget is the resizable Tk Text widget; screenObject is the
-    # Screen model; channel is the PTY channel to resize when dimensions
+    # terminalWidget is the resizable Tk terminal widget; screenObject is
+    # the Screen model; channel is the PTY channel to resize when dimensions
     # change. Types: widget path, TclOO object command, and channel name.
-    constructor {textWidget screenObject channel} {
-        set widget $textWidget
+    constructor {terminalWidget screenObject channel} {
+        set widget $terminalWidget
         set screen $screenObject
         set ptyChannel $channel
 

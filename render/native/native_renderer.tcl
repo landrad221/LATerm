@@ -62,12 +62,6 @@ oo::class create ::LATerm::NativeRenderer {
         my syncCursorBlink
     }
 
-    method setCursorOverlay {overlayObject} {
-        if {$overlayObject ne ""} {
-            error "NativeRenderer draws its cursor internally; overlays are unsupported"
-        }
-    }
-
     method cellSize {} {
         return [$widgetPath cellSize]
     }

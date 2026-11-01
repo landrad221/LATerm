@@ -1,23 +1,30 @@
 # Native Tk renderer
 
+LATerm uses the native renderer as its only application backend. It is
+X11-based, so on Wayland desktops it requires Tk to run through XWayland.
+Build the extension before launching LATerm:
+
+```sh
+cmake -S render/native -B /tmp/laterm-native-build \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/laterm-native-build
+wish main.tcl
+```
+
 This X11 renderer provides `::LATerm::NativeRenderer`, a C-backed renderer
-with the same `render`, `renderDirty`, `updateCursor`, `statistics`, and
-`resetStatistics` methods as `::LATerm::TkRenderer`. It creates a native Tk
-window; ask for its Tk path with `$renderer widget` and pack that window to
-display it. The optional third constructor argument is a Tk font description,
-for example `{{DejaVu Sans Mono} 11}`.
+with `render`, `renderDirty`, `updateCursor`, `statistics`, and
+`resetStatistics` methods. It creates a native Tk window; ask for its Tk path
+with `$renderer widget` and pack that window to display it. The optional third
+constructor argument is a Tk font description, for example
+`{{DejaVu Sans Mono} 11}`.
 
 The renderer draws terminal cell backgrounds, foreground text, bold/italic
 font variants, underlines, wide glyphs, and a block/underline/bar cursor
 directly into its Tk window, including cursor blinking.
-LATerm can use the native renderer with `LATerm_RENDERER=native wish main.tcl`.
-The native backend inherits the default foreground and background colors
-from the `.terminal` Text widget configuration so existing Tk themes remain
-consistent. The default renderer remains `LATerm_RENDERER=text`. The native
-backend supports keyboard input, focus reporting, terminal mouse reporting,
-resize, mouse selection, and Ctrl+Shift+C clipboard copying. It does not
-provide Text widget semantics such as Tk's native selection export or text
-indexing.
+The native backend supports keyboard input, focus reporting, terminal mouse
+reporting, resize, mouse selection, and Ctrl+Shift+C clipboard copying. It
+does not provide Text widget semantics such as Tk's native selection export
+or text indexing.
 
 Example:
 
@@ -54,5 +61,8 @@ Run the native renderer tests with:
 tclsh tests/native_renderer.test
 ```
 
-The benchmark script compares the native renderer with the existing Tk Text
-renderer when the extension has been built.
+Run the native renderer benchmark with:
+
+```sh
+wish tests/native_renderer_benchmark.tcl
+```
