@@ -6,17 +6,16 @@ package require pty
 source parser.tcl
 source render/resize_controller.tcl
 source render/screen.tcl
-source render/tk_renderer.tcl
 source render/screen_adapter.tcl
 source keyboard_encoder.tcl
 source clipboard_controller.tcl
 source render/mouse_encoder.tcl
 source render/mouse_controller.tcl
 source focus_controller.tcl
-source cursor_overlay.tcl
 source pty_writer.tcl
 
 lappend auto_path [file join [file dirname [file normalize [info script]]] render native]
+package require laterm_native_renderer
 
 namespace eval ::LATerm {}
 
@@ -25,11 +24,11 @@ oo::class create ::LATerm::Application {
     # controllers, and every event-loop callback that references them.
     # Keeping those resources together makes shutdown cancel callbacks
     # before destroying the window or channel.
-    variable terminal cursorCanvas
+    variable terminal
     variable ptyChannel ptyFile pid
     variable writer screen adapter parser renderer keyboard clipboard
-    variable rendererBackend selectionAnchor
-    variable mouseEncoder mouseController focusController cursorOverlay
+    variable selectionAnchor
+    variable mouseEncoder mouseController focusController
     variable resizeController
     variable shuttingDown childReaped ptyClosed shutdownAttempts
     variable childMonitorTimer shutdownTimer ptyResumeTimer
@@ -40,16 +39,7 @@ oo::class create ::LATerm::Application {
 
     # Initialize lifecycle flags/statistics, then build and start LATerm.
     constructor {} {
-        set rendererBackend text
-        if {[info exists ::env(LATerm_RENDERER)]} {
-            set rendererBackend [string tolower $::env(LATerm_RENDERER)]
-        }
-        if {$rendererBackend ni {text native}} {
-            error "unsupported LATerm_RENDERER \"$rendererBackend\" (expected text or native)"
-        }
-
         set terminal .terminal
-        set cursorCanvas .cursorOverlay
         set selectionAnchor ""
 
         set pid ""
@@ -91,21 +81,8 @@ oo::class create ::LATerm::Application {
             $screen [list $writer send]]
         set parser [::LATerm::Parser new [list $adapter event]]
 
-        if {$rendererBackend eq "native"} {
-            text $terminal
-            set defaultForeground [$terminal cget -foreground]
-            set defaultBackground [$terminal cget -background]
-            destroy $terminal
-            package require laterm_native_renderer
-            set renderer [::LATerm::NativeRenderer new \
-                $terminal $screen TkFixedFont \
-                $defaultForeground $defaultBackground]
-            set terminal [$renderer widget]
-        } else {
-            set cursorCanvas [canvas $cursorCanvas]
-            text $terminal
-            set renderer [::LATerm::TkRenderer new $terminal $screen]
-        }
+        set renderer [::LATerm::NativeRenderer new $terminal $screen]
+        set terminal [$renderer widget]
 
         set keyboard [::LATerm::KeyboardEncoder new $screen]
         set clipboard [::LATerm::ClipboardController new $screen $writer]
@@ -113,17 +90,7 @@ oo::class create ::LATerm::Application {
         set focusController [::LATerm::FocusController new \
             $screen [list $writer send]]
         set mouseController [::LATerm::MouseController new \
-            $terminal $screen $mouseEncoder $writer \
-            [expr {$rendererBackend eq "native" ? [$renderer cellSize] : ""}]]
-        if {$rendererBackend eq "text"} {
-            set cursorOverlay [::LATerm::CursorOverlay new \
-                $cursorCanvas $terminal $renderer $screen]
-            $renderer setCursorOverlay $cursorOverlay
-            $renderer updateCursor
-            $cursorOverlay refresh
-        } else {
-            set cursorOverlay ""
-        }
+            $terminal $screen $mouseEncoder $writer [$renderer cellSize]]
 
         set heartbeatLast [clock milliseconds]
         set heartbeatTimer [after 100 [list [self] pipelineHeartbeat]]
@@ -145,16 +112,6 @@ oo::class create ::LATerm::Application {
         set resizeController [::LATerm::ResizeController new \
             $terminal $screen $ptyChannel]
 
-        if {$rendererBackend eq "text"} {
-            $terminal configure \
-                -wrap none \
-                -selectbackground "#365a85" \
-                -selectforeground "#ffffff" \
-                -inactiveselectbackground "#365a85" \
-                -exportselection 1 \
-                -takefocus 1
-        }
-
         pack $terminal -fill both -expand true
         bind $terminal <KeyPress> \
             [list [self] handleTerminalKey %W %K %A %s]
@@ -169,9 +126,8 @@ oo::class create ::LATerm::Application {
     }
 
     # Install terminal mouse, focus, clipboard, and keyboard bindings.
-    # The custom bindtag runs before Tk's default Text selection bindings,
-    # allowing terminal mouse-reporting modes to consume those events and
-    # providing cell-based selection for the native widget.
+    # The custom bindtag handles terminal mouse reporting and cell-based
+    # selection for the native widget.
     method installBindings {} {
         bind LATermMouse <ButtonPress-1> \
             [list [self] handleMouse press 1 %x %y %s]
@@ -338,7 +294,7 @@ oo::class create ::LATerm::Application {
     # Process a Tk KeyPress binding. widget is a widget path, keysym and
     # character are Tk event strings, and state is Tk's integer modifier
     # mask. Encoded UTF-8 bytes are queued to the PTY; always return Tk's
-    # break code to prevent the Text widget from editing terminal output.
+    # break code to prevent the terminal widget from handling input itself.
     method handleTerminalKey {widget keysym character state} {
         set shift [expr {($state & 0x0001) != 0}]
         set alt [expr {($state & 0x0008) != 0}]
@@ -363,8 +319,7 @@ oo::class create ::LATerm::Application {
     # args contains the callback-specific integer x, y, and state values.
     # Return Tk's break code only when MouseController consumed the event.
     method handleMouse {operation button args} {
-        if {$rendererBackend eq "native" &&
-            ![$mouseController reporting]} {
+        if {![$mouseController reporting]} {
             switch -- $operation {
                 press {
                     if {$button == 1} {
@@ -420,24 +375,19 @@ oo::class create ::LATerm::Application {
         }
     }
 
-    # Handle Ctrl+Shift+V for the Tk widget path; always stop Tk's default
+    # Handle Ctrl+Shift+V for the terminal widget and stop Tk's default
     # key handling after delegating clipboard work.
     method handleClipboardPaste {widget} {
         $clipboard paste $widget
         return -code break
     }
 
-    # Handle Ctrl+Shift+C for the Tk widget path and suppress default
-    # Text-widget handling.
+    # Handle Ctrl+Shift+C for the native terminal selection.
     method handleClipboardCopy {widget} {
-        if {$rendererBackend eq "native"} {
-            set text [$renderer selectionText]
-            if {$text ne ""} {
-                clipboard clear -displayof $widget
-                clipboard append -displayof $widget -- $text
-            }
-        } else {
-            $clipboard copySelection $widget
+        set text [$renderer selectionText]
+        if {$text ne ""} {
+            clipboard clear -displayof $widget
+            clipboard append -displayof $widget -- $text
         }
         return -code break
     }

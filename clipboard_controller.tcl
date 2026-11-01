@@ -49,21 +49,4 @@ oo::class create ::LATerm::ClipboardController {
             puts stderr "LATerm: PTY paste error: $err"
         }
     }
- 
-    # Copy the Text widget's current selection to the Tk clipboard.
-    # widget is a Tk Text widget path. An absent/empty selection is a no-op.
-    method copySelection {widget} {
-        if {[catch {
-            $widget get sel.first sel.last
-        } text]} {
-            return
-        }
-
-        if {$text eq ""} {
-            return
-        }
-
-        clipboard clear -displayof $widget
-        clipboard append -displayof $widget -- $text
-    }
 }
