@@ -1,0 +1,70 @@
+package require Tcl 8.6
+package require tcltest 2
+
+namespace import ::tcltest::test
+
+if {[catch {package require Tk} tkError]} {
+    puts "Tk unavailable: $tkError"
+    ::tcltest::cleanupTests
+    return
+}
+
+source [file join [file dirname [file dirname [info script]]] appearance_dialog.tcl]
+
+set testDirectory [file join [pwd] ".appearance-test-[pid]"]
+file mkdir $testDirectory
+set testSettings [::LATerm::Appearance::defaults]
+
+test appearance-001 {settings persist as a validated dictionary} -body {
+    set path [file join $testDirectory appearance.conf]
+    ::LATerm::Appearance::save $testSettings $path
+    set loaded [::LATerm::Appearance::load $path]
+    file delete $path
+    expr {$loaded eq $testSettings}
+} -result 1
+
+test appearance-002 {invalid font sizes are rejected} -body {
+    set invalid $testSettings
+    dict set invalid fontSize 49
+    catch {::LATerm::Appearance::validate $invalid} message
+    set message
+} -match glob -result {*font size must be an integer from 6 to 48*}
+
+test appearance-003 {settings content is parsed as data, not evaluated} -body {
+    set path [file join $testDirectory untrusted.conf]
+    set ::appearanceExecuted 0
+    set channel [open $path w]
+    puts $channel {fontFamily {[set ::appearanceExecuted 1]} fontSize 11 foreground #ffffff background #000000}
+    close $channel
+    catch {::LATerm::Appearance::load $path}
+    file delete $path
+    set ::appearanceExecuted
+} -result 0
+
+proc ::appearanceTestApply {settings} {
+    lappend ::appearanceApplied $settings
+}
+
+proc ::appearanceTestSave {settings} {
+    set ::appearanceSaved $settings
+}
+
+test appearance-004 {dialog presets apply and cancel restores the opening settings} -body {
+    set ::appearanceApplied {}
+    set ::appearanceSaved {}
+    set dialog [::LATerm::AppearanceDialog new \
+        $testSettings ::appearanceTestApply ::appearanceTestSave]
+    .appearance.content.preset set Light
+    event generate .appearance.content.preset <<ComboboxSelected>>
+    update
+    set appliedBackground [dict get [lindex $::appearanceApplied 0] background]
+    $dialog cancel
+    set restoredBackground [dict get [lindex $::appearanceApplied end] background]
+    set exists [winfo exists .appearance]
+    list $appliedBackground $restoredBackground $exists \
+        [info object isa object $dialog]
+} -result [list "#f5f5f5" \
+    [dict get $testSettings background] 0 0]
+
+::tcltest::cleanupTests
+file delete -force $testDirectory
