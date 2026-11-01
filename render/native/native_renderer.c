@@ -15,9 +15,7 @@ typedef struct NativeCell {
 } NativeCell;
 
 typedef struct ColorEntry {
-    char *name;
     XColor *color;
-    struct ColorEntry *next;
 } ColorEntry;
 
 typedef struct NativeWidget {
@@ -31,7 +29,10 @@ typedef struct NativeWidget {
     XColor *background;
     GC gc;
     GC invertGc;
-    ColorEntry *colors;
+    Pixmap rowBuffer;
+    int rowBufferWidth;
+    int rowBufferHeight;
+    Tcl_HashTable colors;
     int colorCount;
     NativeCell *cells;
     int cellCount;
@@ -149,45 +150,52 @@ FreeCells(NativeWidget *widget)
 static void
 FreeColors(NativeWidget *widget)
 {
-    ColorEntry *entry = widget->colors;
+    Tcl_HashSearch search;
+    Tcl_HashEntry *hashEntry;
 
-    while (entry != NULL) {
-        ColorEntry *next = entry->next;
+    for (hashEntry = Tcl_FirstHashEntry(&widget->colors, &search);
+         hashEntry != NULL;
+         hashEntry = Tcl_NextHashEntry(&search)) {
+        ColorEntry *entry = (ColorEntry *)Tcl_GetHashValue(hashEntry);
         Tk_FreeColor(entry->color);
-        ckfree(entry->name);
         ckfree((char *)entry);
-        entry = next;
     }
-    widget->colors = NULL;
+    Tcl_DeleteHashTable(&widget->colors);
+    Tcl_InitHashTable(&widget->colors, TCL_STRING_KEYS);
     widget->colorCount = 0;
 }
 
 static XColor *
 GetColor(NativeWidget *widget, const char *name)
 {
+    Tcl_HashEntry *hashEntry = Tcl_FindHashEntry(&widget->colors, name);
     ColorEntry *entry;
 
-    for (entry = widget->colors; entry != NULL; entry = entry->next) {
-        if (strcmp(entry->name, name) == 0) {
-            return entry->color;
-        }
+    if (hashEntry != NULL) {
+        return ((ColorEntry *)Tcl_GetHashValue(hashEntry))->color;
     }
 
     if (widget->colorCount >= 4096) {
         FreeColors(widget);
     }
 
+    {
+        int isNew;
+        hashEntry = Tcl_CreateHashEntry(&widget->colors, name, &isNew);
+        if (!isNew) {
+            return ((ColorEntry *)Tcl_GetHashValue(hashEntry))->color;
+        }
+    }
+
     entry = (ColorEntry *)ckalloc(sizeof(ColorEntry));
-    entry->name = CopyString(name);
     entry->color = Tk_GetColor(widget->interp, widget->tkwin,
         Tk_GetUid(name));
     if (entry->color == NULL) {
-        ckfree(entry->name);
         ckfree((char *)entry);
+        Tcl_DeleteHashEntry(hashEntry);
         return NULL;
     }
-    entry->next = widget->colors;
-    widget->colors = entry;
+    Tcl_SetHashValue(hashEntry, entry);
     ++widget->colorCount;
     return entry->color;
 }
@@ -394,7 +402,7 @@ RefreshCursor(NativeWidget *widget)
 
 static int
 ConsumeDirty(NativeWidget *widget, int *dirtyCountPtr,
-    unsigned char *dirtyRows)
+    unsigned char *dirtyCells)
 {
     Tcl_Obj *method = Tcl_NewStringObj("consumeDirty", -1);
     Tcl_Obj *args[1];
@@ -439,13 +447,40 @@ ConsumeDirty(NativeWidget *widget, int *dirtyCountPtr,
     }
     while (!done) {
         int row;
+        Tcl_Obj **ranges;
+        int rangeCount;
+        int rangeIndex;
         if (Tcl_GetIntFromObj(widget->interp, key, &row) != TCL_OK ||
             row < 0 || row >= widget->rows ||
+            Tcl_ListObjGetElements(widget->interp, value,
+                &rangeCount, &ranges) != TCL_OK ||
             RefreshRow(widget, row) != TCL_OK) {
             Tcl_DictObjDone(&search);
             return TCL_ERROR;
         }
-        dirtyRows[row] = 1;
+        for (rangeIndex = 0; rangeIndex < rangeCount; ++rangeIndex) {
+            Tcl_Obj **bounds;
+            int boundCount;
+            int firstCol;
+            int lastCol;
+            int col;
+            if (Tcl_ListObjGetElements(widget->interp, ranges[rangeIndex],
+                    &boundCount, &bounds) != TCL_OK || boundCount != 2 ||
+                Tcl_GetIntFromObj(widget->interp, bounds[0],
+                    &firstCol) != TCL_OK ||
+                Tcl_GetIntFromObj(widget->interp, bounds[1],
+                    &lastCol) != TCL_OK ||
+                firstCol < 0 || lastCol < firstCol ||
+                lastCol >= widget->cols) {
+                Tcl_DictObjDone(&search);
+                Tcl_SetObjResult(widget->interp,
+                    Tcl_NewStringObj("Screen dirty range is invalid", -1));
+                return TCL_ERROR;
+            }
+            for (col = firstCol; col <= lastCol; ++col) {
+                dirtyCells[row * widget->cols + col] = 1;
+            }
+        }
         ++dirtyCount;
         Tcl_DictObjNext(&search, &key, &value, &done);
     }
@@ -469,220 +504,170 @@ ClearDirty(NativeWidget *widget)
 }
 
 static void
-DrawWidget(NativeWidget *widget, const unsigned char *dirtyRows)
+DrawRow(NativeWidget *widget, Display *display, Drawable drawable,
+    int row, int firstCol, int lastCol, int pixelOriginX,
+    int y, int width, int clearRow)
 {
-    int width;
-    int height;
-    int row;
+    int col;
     Tcl_Time start;
     Tcl_Time end;
-    Display *display;
-    Drawable drawable;
-    Pixmap pixmap;
-    int usePixmap;
-
-    if (widget->tkwin == NULL || !Tk_IsMapped(widget->tkwin)) {
-        return;
-    }
-    width = Tk_Width(widget->tkwin);
-    height = Tk_Height(widget->tkwin);
-    if (width <= 0 || height <= 0) {
-        return;
-    }
+    const char *backgroundRun = NULL;
+    int backgroundStart = 0;
 
     Tcl_GetTime(&start);
-    display = Tk_Display(widget->tkwin);
-    usePixmap = 1;
-    pixmap = usePixmap ? Tk_GetPixmap(display, Tk_WindowId(widget->tkwin),
-        width, height, Tk_Depth(widget->tkwin)) : None;
-    usePixmap = usePixmap && pixmap != None;
-    drawable = usePixmap ? pixmap : Tk_WindowId(widget->tkwin);
-
-    if (dirtyRows == NULL) {
+    if (clearRow) {
         XSetForeground(display, widget->gc, widget->background->pixel);
-        XFillRectangle(display, drawable, widget->gc, 0, 0,
-            (unsigned int)width, (unsigned int)height);
-    } else if (usePixmap) {
-        XCopyArea(display, Tk_WindowId(widget->tkwin), pixmap, widget->gc,
-            0, 0, (unsigned int)width, (unsigned int)height, 0, 0);
+        XFillRectangle(display, drawable, widget->gc, 0, y,
+            (unsigned int)width, (unsigned int)widget->cellHeight);
     }
 
-    for (row = 0; row < widget->rows; ++row) {
-        int col;
-        int y = row * widget->cellHeight;
-        Tcl_Time rowStart;
-        Tcl_Time rowEnd;
-        const char *backgroundRun = NULL;
-        int backgroundStart = 0;
-        if (dirtyRows != NULL && !dirtyRows[row]) continue;
-        Tcl_GetTime(&rowStart);
+    for (col = firstCol; col <= lastCol; ++col) {
+        NativeCell *cell = &widget->cells[row * widget->cols + col];
 
-        if (dirtyRows != NULL) {
-            XSetForeground(display, widget->gc, widget->background->pixel);
-            XFillRectangle(display, drawable, widget->gc, 0, y,
-                (unsigned int)width, (unsigned int)widget->cellHeight);
-        }
-
-        for (col = 0; col < widget->cols; ++col) {
-            NativeCell *cell = &widget->cells[row * widget->cols + col];
-
-            if (cell->width == 0) continue;
-
-            if (backgroundRun == NULL) {
-                backgroundRun = cell->background;
-                backgroundStart = col;
-            } else if (strcmp(backgroundRun, cell->background) != 0) {
-                XColor *color = GetCellColor(widget, backgroundRun,
-                    widget->background);
-                if (color != NULL) {
-                    XSetForeground(display, widget->gc, color->pixel);
-                    XFillRectangle(display, drawable, widget->gc,
-                        backgroundStart * widget->cellWidth, y,
-                        (unsigned int)((col - backgroundStart) *
-                            widget->cellWidth),
-                        (unsigned int)widget->cellHeight);
-                }
-                backgroundRun = cell->background;
-                backgroundStart = col;
-            }
-        }
-
-        if (backgroundRun != NULL) {
+        if (cell->width == 0) continue;
+        if (backgroundRun == NULL) {
+            backgroundRun = cell->background;
+            backgroundStart = col;
+        } else if (strcmp(backgroundRun, cell->background) != 0) {
             XColor *color = GetCellColor(widget, backgroundRun,
                 widget->background);
             if (color != NULL) {
                 XSetForeground(display, widget->gc, color->pixel);
                 XFillRectangle(display, drawable, widget->gc,
-                    backgroundStart * widget->cellWidth, y,
-                    (unsigned int)((widget->cols - backgroundStart) *
+                    backgroundStart * widget->cellWidth - pixelOriginX, y,
+                    (unsigned int)((col - backgroundStart) *
                         widget->cellWidth),
                     (unsigned int)widget->cellHeight);
             }
+            backgroundRun = cell->background;
+            backgroundStart = col;
         }
+    }
+    if (backgroundRun != NULL) {
+        XColor *color = GetCellColor(widget, backgroundRun,
+            widget->background);
+        if (color != NULL) {
+            XSetForeground(display, widget->gc, color->pixel);
+            XFillRectangle(display, drawable, widget->gc,
+                backgroundStart * widget->cellWidth - pixelOriginX, y,
+                (unsigned int)((lastCol + 1 - backgroundStart) *
+                    widget->cellWidth),
+                (unsigned int)widget->cellHeight);
+        }
+    }
 
-        {
-            const char *foregroundRun = NULL;
-            int fontRun = -1;
-            int underlineRun = -1;
-            int textStart = 0;
-            Tcl_DString textRun;
-            Tcl_DStringInit(&textRun);
+    {
+        const char *foregroundRun = NULL;
+        int fontRun = -1;
+        int underlineRun = -1;
+        int textStart = 0;
+        Tcl_DString textRun;
+        Tcl_DStringInit(&textRun);
 
-            for (col = 0; col < widget->cols; ++col) {
-                NativeCell *cell = &widget->cells[row * widget->cols + col];
-                int fontIndex;
+        for (col = firstCol; col <= lastCol; ++col) {
+            NativeCell *cell = &widget->cells[row * widget->cols + col];
+            int fontIndex;
 
-                if (cell->width == 0) continue;
-
-                fontIndex = (cell->bold ? 1 : 0) + (cell->italic ? 2 : 0);
-
-                if (foregroundRun == NULL) {
-                    foregroundRun = cell->foreground;
-                    fontRun = fontIndex;
-                    underlineRun = cell->underline;
-                    textStart = col;
-                } else if (strcmp(foregroundRun, cell->foreground) != 0 ||
-                    fontRun != fontIndex ||
-                    underlineRun != cell->underline) {
-                    XColor *color = GetCellColor(widget, foregroundRun,
-                        widget->foreground);
-                    if (color != NULL && Tcl_DStringLength(&textRun) > 0) {
-                        XSetFont(display, widget->gc,
-                            Tk_FontId(widget->fonts[fontRun]));
-                        XSetForeground(display, widget->gc, color->pixel);
-                        Tk_DrawChars(display, drawable, widget->gc,
-                            widget->fonts[fontRun],
-                            Tcl_DStringValue(&textRun),
-                            Tcl_DStringLength(&textRun),
-                            textStart * widget->cellWidth,
-                            y + widget->fontAscent[fontRun]);
-                        if (underlineRun) {
-                            XDrawLine(display, drawable, widget->gc,
-                                textStart * widget->cellWidth,
-                                y + widget->cellHeight - 2,
-                                col * widget->cellWidth - 1,
-                                y + widget->cellHeight - 2);
-                        }
-                    }
-                    Tcl_DStringSetLength(&textRun, 0);
-                    foregroundRun = cell->foreground;
-                    fontRun = fontIndex;
-                    underlineRun = cell->underline;
-                    textStart = col;
-                }
-                Tcl_DStringAppend(&textRun, cell->text, -1);
-            }
-
-            if (foregroundRun != NULL && Tcl_DStringLength(&textRun) > 0) {
+            if (cell->width == 0) continue;
+            fontIndex = (cell->bold ? 1 : 0) + (cell->italic ? 2 : 0);
+            if (foregroundRun == NULL) {
+                foregroundRun = cell->foreground;
+                fontRun = fontIndex;
+                underlineRun = cell->underline;
+                textStart = col;
+            } else if (strcmp(foregroundRun, cell->foreground) != 0 ||
+                fontRun != fontIndex || underlineRun != cell->underline) {
                 XColor *color = GetCellColor(widget, foregroundRun,
                     widget->foreground);
-                if (color != NULL) {
+                if (color != NULL && Tcl_DStringLength(&textRun) > 0) {
                     XSetFont(display, widget->gc,
                         Tk_FontId(widget->fonts[fontRun]));
                     XSetForeground(display, widget->gc, color->pixel);
                     Tk_DrawChars(display, drawable, widget->gc,
                         widget->fonts[fontRun], Tcl_DStringValue(&textRun),
                         Tcl_DStringLength(&textRun),
-                        textStart * widget->cellWidth,
+                        textStart * widget->cellWidth - pixelOriginX,
                         y + widget->fontAscent[fontRun]);
                     if (underlineRun) {
                         XDrawLine(display, drawable, widget->gc,
-                            textStart * widget->cellWidth,
+                            textStart * widget->cellWidth - pixelOriginX,
                             y + widget->cellHeight - 2,
-                            widget->cols * widget->cellWidth - 1,
+                            col * widget->cellWidth - pixelOriginX - 1,
                             y + widget->cellHeight - 2);
                     }
                 }
+                Tcl_DStringSetLength(&textRun, 0);
+                foregroundRun = cell->foreground;
+                fontRun = fontIndex;
+                underlineRun = cell->underline;
+                textStart = col;
             }
-            Tcl_DStringFree(&textRun);
+            Tcl_DStringAppend(&textRun, cell->text, -1);
         }
 
-        Tcl_GetTime(&rowEnd);
-        {
-            int rowUs = (int)ElapsedMicroseconds(&rowStart, &rowEnd);
-            if (rowUs > widget->maxRowUs) widget->maxRowUs = rowUs;
+        if (foregroundRun != NULL && Tcl_DStringLength(&textRun) > 0) {
+            XColor *color = GetCellColor(widget, foregroundRun,
+                widget->foreground);
+            if (color != NULL) {
+                XSetFont(display, widget->gc,
+                    Tk_FontId(widget->fonts[fontRun]));
+                XSetForeground(display, widget->gc, color->pixel);
+                Tk_DrawChars(display, drawable, widget->gc,
+                    widget->fonts[fontRun], Tcl_DStringValue(&textRun),
+                    Tcl_DStringLength(&textRun),
+                    textStart * widget->cellWidth - pixelOriginX,
+                    y + widget->fontAscent[fontRun]);
+                if (underlineRun) {
+                    XDrawLine(display, drawable, widget->gc,
+                        textStart * widget->cellWidth - pixelOriginX,
+                        y + widget->cellHeight - 2,
+                        (lastCol + 1) * widget->cellWidth -
+                            pixelOriginX - 1,
+                        y + widget->cellHeight - 2);
+                }
+            }
         }
+        Tcl_DStringFree(&textRun);
     }
 
     if (widget->selectionActive) {
         int firstRow = widget->selectionStart / widget->cols;
         int lastRow = widget->selectionEnd / widget->cols;
-        XSetFunction(display, widget->invertGc, GXinvert);
-        for (row = firstRow; row <= lastRow; ++row) {
-            int firstCol;
-            int lastCol;
-            int col;
-            if (dirtyRows != NULL && !dirtyRows[row]) continue;
-            firstCol = row == firstRow
+        if (row >= firstRow && row <= lastRow) {
+            int selectionFirstCol = row == firstRow
                 ? widget->selectionStart % widget->cols : 0;
-            lastCol = row == lastRow
+            int selectionLastCol = row == lastRow
                 ? widget->selectionEnd % widget->cols : widget->cols - 1;
-            for (col = firstCol; col <= lastCol; ++col) {
+            int selectionFirst = selectionFirstCol > firstCol
+                ? selectionFirstCol : firstCol;
+            int selectionLast = selectionLastCol < lastCol
+                ? selectionLastCol : lastCol;
+            XSetFunction(display, widget->invertGc, GXinvert);
+            for (col = selectionFirst; col <= selectionLast; ++col) {
                 NativeCell *cell = &widget->cells[row * widget->cols + col];
                 if (cell->width == 0) continue;
                 XFillRectangle(display, drawable, widget->invertGc,
-                    col * widget->cellWidth, row * widget->cellHeight,
+                    col * widget->cellWidth - pixelOriginX, y,
                     (unsigned int)(widget->cellWidth *
                         (cell->width == 2 ? 2 : 1)),
                     (unsigned int)widget->cellHeight);
             }
+            XSetFunction(display, widget->invertGc, GXcopy);
         }
-        XSetFunction(display, widget->invertGc, GXcopy);
     }
 
     if (widget->cursorVisible && widget->cursorBlinkVisible &&
-        widget->cursorRow >= 0 && widget->cursorRow < widget->rows &&
-        widget->cursorCol >= 0 && widget->cursorCol < widget->cols &&
-        (dirtyRows == NULL || dirtyRows[widget->cursorRow])) {
+        widget->cursorRow == row &&
+        widget->cursorCol >= firstCol && widget->cursorCol <= lastCol) {
         NativeCell *cell = &widget->cells[
             widget->cursorRow * widget->cols + widget->cursorCol];
-        int x = widget->cursorCol * widget->cellWidth;
-        int y = widget->cursorRow * widget->cellHeight;
+        int x = widget->cursorCol * widget->cellWidth - pixelOriginX;
+        int cursorY = y;
         int cursorWidth = widget->cellWidth * (cell->width == 2 ? 2 : 1);
         int cursorHeight = widget->cellHeight;
 
         if (widget->cursorShape == 1) {
-            y += widget->cellHeight - 2;
+            cursorY += widget->cellHeight - 2;
             cursorHeight = 2;
         } else if (widget->cursorShape == 2) {
             cursorWidth = 2;
@@ -696,7 +681,7 @@ DrawWidget(NativeWidget *widget, const unsigned char *dirtyRows)
             if (cursorForeground != NULL && cursorBackground != NULL) {
                 XSetForeground(display, widget->gc,
                     cursorForeground->pixel);
-                XFillRectangle(display, drawable, widget->gc, x, y,
+                XFillRectangle(display, drawable, widget->gc, x, cursorY,
                     (unsigned int)cursorWidth, (unsigned int)cursorHeight);
                 if (widget->cursorShape == 0 && cell->width > 0) {
                     int fontIndex = (cell->bold ? 1 : 0) +
@@ -708,8 +693,135 @@ DrawWidget(NativeWidget *widget, const unsigned char *dirtyRows)
                     Tk_DrawChars(display, drawable, widget->gc,
                         widget->fonts[fontIndex],
                         cell->text, (int)strlen(cell->text), x,
-                        widget->cursorRow * widget->cellHeight +
-                            widget->fontAscent[fontIndex]);
+                        y + widget->fontAscent[fontIndex]);
+                }
+            }
+        }
+    }
+
+    Tcl_GetTime(&end);
+    {
+        int rowUs = (int)ElapsedMicroseconds(&start, &end);
+        if (rowUs > widget->maxRowUs) widget->maxRowUs = rowUs;
+    }
+}
+
+static void
+MarkDirtyCell(NativeWidget *widget, unsigned char *dirtyCells,
+    int row, int col)
+{
+    NativeCell *cell;
+
+    if (row < 0 || row >= widget->rows ||
+        col < 0 || col >= widget->cols) {
+        return;
+    }
+
+    cell = &widget->cells[row * widget->cols + col];
+    if (cell->width == 0 && col > 0) {
+        --col;
+        cell = &widget->cells[row * widget->cols + col];
+    }
+    dirtyCells[row * widget->cols + col] = 1;
+    if (cell->width == 2 && col + 1 < widget->cols) {
+        dirtyCells[row * widget->cols + col + 1] = 1;
+    }
+}
+
+static void
+DrawWidget(NativeWidget *widget, const unsigned char *dirtyCells)
+{
+    int width;
+    int height;
+    int row;
+    Tcl_Time start;
+    Tcl_Time end;
+    Display *display;
+    Drawable drawable;
+    Pixmap pixmap = None;
+    int usePixmap = 0;
+
+    if (widget->tkwin == NULL || !Tk_IsMapped(widget->tkwin)) return;
+    width = Tk_Width(widget->tkwin);
+    height = Tk_Height(widget->tkwin);
+    if (width <= 0 || height <= 0) return;
+
+    Tcl_GetTime(&start);
+    display = Tk_Display(widget->tkwin);
+    drawable = Tk_WindowId(widget->tkwin);
+
+    if (dirtyCells == NULL) {
+        pixmap = Tk_GetPixmap(display, Tk_WindowId(widget->tkwin),
+            width, height, Tk_Depth(widget->tkwin));
+        usePixmap = pixmap != None;
+        if (usePixmap) drawable = pixmap;
+        XSetForeground(display, widget->gc, widget->background->pixel);
+        XFillRectangle(display, drawable, widget->gc, 0, 0,
+            (unsigned int)width, (unsigned int)height);
+    } else {
+        if (widget->rowBuffer != None &&
+            (widget->rowBufferWidth != width ||
+             widget->rowBufferHeight != widget->cellHeight)) {
+            Tk_FreePixmap(display, widget->rowBuffer);
+            widget->rowBuffer = None;
+        }
+        if (widget->rowBuffer == None) {
+            widget->rowBuffer = Tk_GetPixmap(display,
+                Tk_WindowId(widget->tkwin), width, widget->cellHeight,
+                Tk_Depth(widget->tkwin));
+            if (widget->rowBuffer != None) {
+                widget->rowBufferWidth = width;
+                widget->rowBufferHeight = widget->cellHeight;
+            }
+        }
+    }
+
+    for (row = 0; row < widget->rows; ++row) {
+        int y = row * widget->cellHeight;
+        if (dirtyCells == NULL) {
+            DrawRow(widget, display, drawable, row, 0,
+                widget->cols - 1, 0, y, width, 0);
+        } else {
+            int col = 0;
+            while (col < widget->cols) {
+                int firstCol;
+                int lastCol;
+                int originX;
+                int rangeWidth;
+
+                while (col < widget->cols &&
+                    !dirtyCells[row * widget->cols + col]) {
+                    ++col;
+                }
+                if (col >= widget->cols) break;
+                firstCol = col;
+                while (col + 1 < widget->cols &&
+                    dirtyCells[row * widget->cols + col + 1]) {
+                    ++col;
+                }
+                lastCol = col;
+                ++col;
+                originX = firstCol * widget->cellWidth;
+                rangeWidth = (lastCol - firstCol + 1) * widget->cellWidth;
+                if (originX >= width) continue;
+                if (rangeWidth > width - originX) {
+                    rangeWidth = width - originX;
+                }
+
+                if (widget->rowBuffer != None) {
+                    XCopyArea(display, Tk_WindowId(widget->tkwin),
+                        widget->rowBuffer, widget->gc, originX, y,
+                        (unsigned int)rangeWidth,
+                        (unsigned int)widget->cellHeight, 0, 0);
+                    DrawRow(widget, display, widget->rowBuffer, row,
+                        firstCol, lastCol, originX, 0, rangeWidth, 1);
+                    XCopyArea(display, widget->rowBuffer,
+                        Tk_WindowId(widget->tkwin), widget->gc, 0, 0,
+                        (unsigned int)rangeWidth,
+                        (unsigned int)widget->cellHeight, originX, y);
+                } else {
+                    DrawRow(widget, display, Tk_WindowId(widget->tkwin),
+                        row, firstCol, lastCol, originX, y, rangeWidth, 1);
                 }
             }
         }
@@ -1022,8 +1134,9 @@ WidgetCommand(ClientData clientData, Tcl_Interp *interp,
         strcmp(subcommand, "renderDirty") == 0) {
         int row;
         int dirtyCount = 0;
-        unsigned char *dirtyRows = NULL;
+        unsigned char *dirtyCells = NULL;
         int previousCursorRow = widget->cursorRow;
+        int previousCursorCol = widget->cursorCol;
         int oldRows = widget->rows;
         int oldCols = widget->cols;
         int dimensionsChanged;
@@ -1076,31 +1189,39 @@ WidgetCommand(ClientData clientData, Tcl_Interp *interp,
             if (ClearDirty(widget) != TCL_OK) return TCL_ERROR;
             ++widget->fullRedraws;
         } else {
-            dirtyRows = (unsigned char *)ckalloc((size_t)widget->rows);
-            memset(dirtyRows, 0, (size_t)widget->rows);
-            if (ConsumeDirty(widget, &dirtyCount, dirtyRows) != TCL_OK) {
-                ckfree((char *)dirtyRows);
+            dirtyCells = (unsigned char *)ckalloc(
+                (size_t)widget->rows * widget->cols);
+            memset(dirtyCells, 0,
+                (size_t)widget->rows * widget->cols);
+            if (ConsumeDirty(widget, &dirtyCount, dirtyCells) != TCL_OK) {
+                ckfree((char *)dirtyCells);
                 return TCL_ERROR;
             }
         }
 
         if (RefreshCursor(widget) != TCL_OK) return TCL_ERROR;
-        if (dirtyRows != NULL && widget->cursorDirty) {
-            if (previousCursorRow >= 0 && previousCursorRow < widget->rows) {
-                dirtyRows[previousCursorRow] = 1;
-            }
-            if (widget->cursorRow >= 0 && widget->cursorRow < widget->rows) {
-                dirtyRows[widget->cursorRow] = 1;
-            }
+        if (dirtyCells != NULL && widget->cursorDirty) {
+            MarkDirtyCell(widget, dirtyCells,
+                previousCursorRow, previousCursorCol);
+            MarkDirtyCell(widget, dirtyCells,
+                widget->cursorRow, widget->cursorCol);
         }
-        if (dirtyRows != NULL) {
-            int row;
+        if (dirtyCells != NULL) {
+            int col;
             int needsPaint = widget->cursorDirty || dirtyCount > 0;
-            if (needsPaint) DrawWidget(widget, dirtyRows);
+            if (needsPaint) DrawWidget(widget, dirtyCells);
+            dirtyCount = 0;
             for (row = 0; row < widget->rows; ++row) {
-                if (dirtyRows[row]) ++dirtyCount;
+                int rowDirty = 0;
+                for (col = 0; col < widget->cols; ++col) {
+                    if (dirtyCells[row * widget->cols + col]) {
+                        rowDirty = 1;
+                        break;
+                    }
+                }
+                if (rowDirty) ++dirtyCount;
             }
-            ckfree((char *)dirtyRows);
+            ckfree((char *)dirtyCells);
         } else {
             DrawWidget(widget, NULL);
         }
@@ -1110,19 +1231,19 @@ WidgetCommand(ClientData clientData, Tcl_Interp *interp,
     }
 
     if (strcmp(subcommand, "updateCursor") == 0) {
-        unsigned char *dirtyRows;
+        unsigned char *dirtyCells;
         int previousCursorRow = widget->cursorRow;
+        int previousCursorCol = widget->cursorCol;
         if (RefreshCursor(widget) != TCL_OK) return TCL_ERROR;
-        dirtyRows = (unsigned char *)ckalloc((size_t)widget->rows);
-        memset(dirtyRows, 0, (size_t)widget->rows);
-        if (previousCursorRow >= 0 && previousCursorRow < widget->rows) {
-            dirtyRows[previousCursorRow] = 1;
-        }
-        if (widget->cursorRow >= 0 && widget->cursorRow < widget->rows) {
-            dirtyRows[widget->cursorRow] = 1;
-        }
-        DrawWidget(widget, dirtyRows);
-        ckfree((char *)dirtyRows);
+        dirtyCells = (unsigned char *)ckalloc(
+            (size_t)widget->rows * widget->cols);
+        memset(dirtyCells, 0, (size_t)widget->rows * widget->cols);
+        MarkDirtyCell(widget, dirtyCells,
+            previousCursorRow, previousCursorCol);
+        MarkDirtyCell(widget, dirtyCells,
+            widget->cursorRow, widget->cursorCol);
+        DrawWidget(widget, dirtyCells);
+        ckfree((char *)dirtyCells);
         return TCL_OK;
     }
 
@@ -1138,7 +1259,7 @@ WidgetCommand(ClientData clientData, Tcl_Interp *interp,
     }
 
     if (strcmp(subcommand, "cursorBlink") == 0) {
-        unsigned char *dirtyRows;
+        unsigned char *dirtyCells;
         int visible;
         if (objc != 3 ||
             Tcl_GetBooleanFromObj(interp, objv[2], &visible) != TCL_OK) {
@@ -1146,13 +1267,13 @@ WidgetCommand(ClientData clientData, Tcl_Interp *interp,
             return TCL_ERROR;
         }
         widget->cursorBlinkVisible = visible;
-        dirtyRows = (unsigned char *)ckalloc((size_t)widget->rows);
-        memset(dirtyRows, 0, (size_t)widget->rows);
-        if (widget->cursorRow >= 0 && widget->cursorRow < widget->rows) {
-            dirtyRows[widget->cursorRow] = 1;
-        }
-        DrawWidget(widget, dirtyRows);
-        ckfree((char *)dirtyRows);
+        dirtyCells = (unsigned char *)ckalloc(
+            (size_t)widget->rows * widget->cols);
+        memset(dirtyCells, 0, (size_t)widget->rows * widget->cols);
+        MarkDirtyCell(widget, dirtyCells,
+            widget->cursorRow, widget->cursorCol);
+        DrawWidget(widget, dirtyCells);
+        ckfree((char *)dirtyCells);
         return TCL_OK;
     }
 
@@ -1216,6 +1337,10 @@ WidgetCommandDeleted(ClientData clientData)
 
     FreeCells(widget);
     FreeColors(widget);
+    Tcl_DeleteHashTable(&widget->colors);
+    if (widget->rowBuffer != None) {
+        Tk_FreePixmap(widget->display, widget->rowBuffer);
+    }
     {
         int i;
         for (i = 0; i < 4; ++i) {
@@ -1252,6 +1377,7 @@ CreateWidget(ClientData clientData, Tcl_Interp *interp,
 
     widget = (NativeWidget *)ckalloc(sizeof(NativeWidget));
     memset(widget, 0, sizeof(NativeWidget));
+    Tcl_InitHashTable(&widget->colors, TCL_STRING_KEYS);
     widget->interp = interp;
     widget->tkwin = tkwin;
     widget->display = Tk_Display(tkwin);
